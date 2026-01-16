@@ -1384,12 +1384,12 @@ result = db.query(UiChat).filter(...).first()  # Синхронный query в a
 #### Security & Compliance (3-5 дней)
 - [ ] Security audit (2 дня)
 - [ ] GDPR compliance review (2-3 дня)
-- [ ] Secrets management (1-2 дня)
+- [x] Secrets management (1-2 дня)
 
 #### Operational Excellence (4-6 дней)
 - [ ] Disaster Recovery Plan (1 день - документация)
 - [ ] Distributed tracing (2-3 дня)
-- [ ] API rate limiting (1 день)
+- [x] API rate limiting (1 день)
 - [ ] DB indexes review (1-2 дня)
 
 #### User Experience (2-3 дня)

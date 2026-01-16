@@ -48,6 +48,7 @@ from src.app_settings import (
 from src.bridge import AmoCRMTelegramBridge
 from src.amocrm_client import AmoCRMClient
 from src.retention import run_retention
+from src.rate_limiter import check_rate_limit
 from src.outbox import (
     build_idempotency_key,
     enqueue_outbox,
@@ -472,11 +473,26 @@ def humanize_send_error(status: str) -> tuple[str, bool]:
     return status, False
 
 
-def verify_api_key(x_api_key: str = Header(...)):
-    """Проверка API ключа"""
+async def verify_api_key(
+    request: Request,
+    x_api_key: str = Header(...)
+):
+    """Проверка API ключа + rate limit."""
     if x_api_key != settings.API_SECRET_KEY:
-        logger.warning(f"⚠️ Попытка доступа с неверным API ключом")
+        logger.warning("⚠️ Попытка доступа с неверным API ключом")
         raise HTTPException(status_code=403, detail="Invalid API key")
+
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"{x_api_key}:{client_ip}"
+    allowed, _ = await check_rate_limit(
+        key,
+        settings.API_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+        prefix="api"
+    )
+    if not allowed:
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+
     return x_api_key
 
 

@@ -59,6 +59,13 @@ ALLOWED_SETTINGS: Dict[str, Dict[str, Any]] = {
         "description": "Пауза worker между проверками outbox (сек).",
         "requires_restart": True,
     },
+    "API_RATE_LIMIT_PER_MINUTE": {
+        "type": int,
+        "min": 0,
+        "max": 100000,
+        "description": "Лимит запросов к /api/* в минуту (0 = отключить).",
+        "requires_restart": False,
+    },
     "UI_MESSAGE_RETENTION_DAYS": {
         "type": int,
         "min": 0,

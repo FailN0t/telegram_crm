@@ -4,6 +4,7 @@
 ### Внешние API (`/api/*`)
 - Требуется заголовок `X-API-Key: <API_SECRET_KEY>`.
 - Idempotency: заголовок `Idempotency-Key` (опционально).
+- Ограничение частоты запросов: `API_RATE_LIMIT_PER_MINUTE` (ответ `429 rate_limit_exceeded`).
 
 ### UI API (`/api/ui/*`)
 - Если `UI_BASIC_AUTH_ENABLED=true`, используется Basic Auth.

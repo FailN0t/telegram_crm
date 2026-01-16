@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     API_PORT: int = Field(default=8000, env="API_PORT")
     API_SECRET_KEY: str = Field(..., env="API_SECRET_KEY")
     API_ALLOWED_IPS: list[str] = Field(default=[], env="API_ALLOWED_IPS")
+    API_RATE_LIMIT_PER_MINUTE: int = Field(default=120, env="API_RATE_LIMIT_PER_MINUTE")
 
     # UI Basic Auth (optional)
     UI_BASIC_AUTH_ENABLED: bool = Field(default=False, env="UI_BASIC_AUTH_ENABLED")

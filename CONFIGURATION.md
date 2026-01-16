@@ -79,6 +79,7 @@ Redis используется для:
 | `API_HOST` | нет | Хост FastAPI | `0.0.0.0` |
 | `API_PORT` | нет | Порт FastAPI | `8000` |
 | `API_SECRET_KEY` | да | API ключ для `/api/*` | `CHANGE_ME` |
+| `API_RATE_LIMIT_PER_MINUTE` | нет | Rate limit для `/api/*` (0 = отключить) | `120` |
 | `API_ALLOWED_IPS` | нет | CSV белый список IP | `1.2.3.4,5.6.7.8` |
 
 `API_ALLOWED_IPS` сейчас **не используется в коде**, оставлено под будущие ограничения.

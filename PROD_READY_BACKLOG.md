@@ -291,6 +291,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Alembic миграции — контроль схемы БД
 - [x] Мониторинг — знаем о проблемах до пользователей
 - [x] Бэкапы — RPO/RTO заданы и проверяются
+- [x] API rate limiting — защита /api/* по лимитам
 
 ### Улучшения (NICE TO HAVE)
 - [x] HTML вынесен из Python
