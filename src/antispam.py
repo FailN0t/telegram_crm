@@ -4,11 +4,53 @@ Anti-Spam менеджер для предотвращения блокиров�
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Tuple
+from typing import Tuple, Optional
 
 from src.config import settings
 from src.logger import logger
 from src.redis_client import get_redis
+
+
+# Lua скрипт для атомарной проверки и инкремента счетчика
+# Возвращает: {1, new_value} если успешно, {0, current_value} если лимит превышен
+LUA_ATOMIC_CHECK_INCREMENT = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+
+local current = redis.call('GET', key)
+if current and tonumber(current) >= limit then
+    return {0, tonumber(current)}
+end
+
+local new_val = redis.call('INCR', key)
+if new_val == 1 then
+    redis.call('EXPIRE', key, ttl)
+end
+return {1, new_val}
+"""
+
+# Lua скрипт для атомарной проверки времени последнего сообщения
+# Возвращает: {1, timestamp} если можно отправить, {0, timestamp, wait_seconds} если нужно подождать
+LUA_ATOMIC_CHECK_DELAY = """
+local key = KEYS[1]
+local min_delay = tonumber(ARGV[1])
+local current_timestamp = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+
+local last_timestamp = redis.call('GET', key)
+if last_timestamp then
+    local time_since_last = current_timestamp - tonumber(last_timestamp)
+    if time_since_last < min_delay then
+        local wait_time = min_delay - time_since_last
+        return {0, tonumber(last_timestamp), wait_time}
+    end
+end
+
+redis.call('SET', key, tostring(current_timestamp))
+redis.call('EXPIRE', key, ttl)
+return {1, current_timestamp}
+"""
 
 
 class AntiSpamManager:
@@ -16,7 +58,7 @@ class AntiSpamManager:
     Менеджер для контроля лимитов отправки сообщений
     Предотвращает блокировку аккаунта Telegram
     """
-    
+
     def __init__(self):
         # Счетчики
         self.message_count = 0
@@ -24,15 +66,19 @@ class AntiSpamManager:
         self.daily_new_chats = 0
         self.day_start = datetime.now()
         self.sent_to_today = set()
-        
+
         # Лимиты из конфигурации
         self.MAX_MESSAGES_PER_HOUR = settings.MAX_MESSAGES_PER_HOUR
         self.MAX_NEW_CHATS_PER_DAY = settings.MAX_NEW_CHATS_PER_DAY
         self.MIN_DELAY_BETWEEN_MESSAGES = settings.MIN_DELAY_BETWEEN_MESSAGES
-        
+
         self.last_message_time = None
         self._lock = asyncio.Lock()
-        
+
+        # Кеш для скомпилированных Lua скриптов
+        self._lua_check_increment_sha: Optional[str] = None
+        self._lua_check_delay_sha: Optional[str] = None
+
         logger.info(
             f"📊 Anti-Spam инициализирован: "
             f"{self.MAX_MESSAGES_PER_HOUR} msg/hour, "
@@ -79,14 +125,133 @@ class AntiSpamManager:
     def _last_message_key(self) -> str:
         return "antispam:last_message_at"
 
+    async def _ensure_lua_scripts(self, redis) -> None:
+        """Загружает Lua скрипты в Redis если они еще не загружены"""
+        if not self._lua_check_increment_sha:
+            try:
+                self._lua_check_increment_sha = await redis.script_load(LUA_ATOMIC_CHECK_INCREMENT)
+                logger.debug("Lua скрипт check_increment загружен")
+            except Exception as exc:
+                logger.warning(f"Не удалось загрузить Lua скрипт check_increment: {exc}")
+
+        if not self._lua_check_delay_sha:
+            try:
+                self._lua_check_delay_sha = await redis.script_load(LUA_ATOMIC_CHECK_DELAY)
+                logger.debug("Lua скрипт check_delay загружен")
+            except Exception as exc:
+                logger.warning(f"Не удалось загрузить Lua скрипт check_delay: {exc}")
+
+    async def _atomic_check_and_increment(
+        self,
+        redis,
+        key: str,
+        limit: int,
+        ttl: int
+    ) -> Tuple[bool, int]:
+        """
+        Атомарно проверяет лимит и инкрементирует счетчик
+
+        Args:
+            redis: Redis клиент
+            key: Ключ счетчика
+            limit: Максимальное значение
+            ttl: Время жизни ключа в секундах
+
+        Returns:
+            (success, current_value): True если успешно, текущее значение
+        """
+        await self._ensure_lua_scripts(redis)
+
+        try:
+            if self._lua_check_increment_sha:
+                # Используем EVALSHA для производительности
+                result = await redis.evalsha(
+                    self._lua_check_increment_sha,
+                    1,  # количество ключей
+                    key,
+                    limit,
+                    ttl
+                )
+            else:
+                # Fallback на EVAL если скрипт не загружен
+                result = await redis.eval(
+                    LUA_ATOMIC_CHECK_INCREMENT,
+                    1,
+                    key,
+                    limit,
+                    ttl
+                )
+
+            success = bool(result[0])
+            current_value = int(result[1])
+            return success, current_value
+
+        except Exception as exc:
+            logger.error(f"Ошибка при выполнении Lua скрипта check_increment: {exc}")
+            raise
+
+    async def _atomic_check_delay(
+        self,
+        redis,
+        key: str,
+        min_delay: float,
+        current_timestamp: float,
+        ttl: int
+    ) -> Tuple[bool, float]:
+        """
+        Атомарно проверяет задержку с последнего сообщения и обновляет timestamp
+
+        Args:
+            redis: Redis клиент
+            key: Ключ timestamp
+            min_delay: Минимальная задержка в секундах
+            current_timestamp: Текущий timestamp
+            ttl: Время жизни ключа в секундах
+
+        Returns:
+            (success, wait_time): True если можно отправить, время ожидания если нет
+        """
+        await self._ensure_lua_scripts(redis)
+
+        try:
+            if self._lua_check_delay_sha:
+                result = await redis.evalsha(
+                    self._lua_check_delay_sha,
+                    1,
+                    key,
+                    min_delay,
+                    current_timestamp,
+                    ttl
+                )
+            else:
+                result = await redis.eval(
+                    LUA_ATOMIC_CHECK_DELAY,
+                    1,
+                    key,
+                    min_delay,
+                    current_timestamp,
+                    ttl
+                )
+
+            success = bool(result[0])
+            if success:
+                return True, 0.0
+            else:
+                wait_time = float(result[2])
+                return False, wait_time
+
+        except Exception as exc:
+            logger.error(f"Ошибка при выполнении Lua скрипта check_delay: {exc}")
+            raise
+
     async def try_register_send(self, user_id: int, is_new_chat: bool = False) -> Tuple[bool, str]:
         """
         Проверяет лимиты и регистрирует отправку одним атомарным шагом
-        
+
         Args:
             user_id: ID пользователя Telegram
             is_new_chat: Является ли это первым сообщением пользователю
-            
+
         Returns:
             (bool, str): (можно ли отправить, причина если нельзя)
         """
@@ -116,64 +281,72 @@ class AntiSpamManager:
         last_key = self._last_message_key()
 
         try:
-            hour_value = await redis.get(hour_key)
-            day_value = await redis.get(day_key)
-            last_value = await redis.get(last_key)
+            # Проверяем, контактировали ли мы уже с этим пользователем сегодня
             already_contacted = await redis.sismember(users_key, user_id)
+            if already_contacted:
+                is_new_chat = False
+
+            # 1. АТОМАРНАЯ проверка задержки между сообщениями
+            delay_ok, wait_time = await self._atomic_check_delay(
+                redis,
+                last_key,
+                self.MIN_DELAY_BETWEEN_MESSAGES,
+                now.timestamp(),
+                max(int(self.MIN_DELAY_BETWEEN_MESSAGES * 2), 60)
+            )
+            if not delay_ok:
+                return False, f"⏳ Подождите {wait_time:.1f}с перед следующим сообщением"
+
+            # 2. АТОМАРНАЯ проверка и инкремент почасового лимита
+            hour_ok, hour_count = await self._atomic_check_and_increment(
+                redis,
+                hour_key,
+                self.MAX_MESSAGES_PER_HOUR,
+                2 * 60 * 60  # TTL = 2 часа
+            )
+            if not hour_ok:
+                return False, (
+                    f"⚠️ Превышен лимит сообщений в час "
+                    f"({hour_count}/{self.MAX_MESSAGES_PER_HOUR})"
+                )
+
+            # 3. АТОМАРНАЯ проверка и инкремент дневного лимита новых чатов (если нужно)
+            day_count = 0
+            if is_new_chat:
+                day_ok, day_count = await self._atomic_check_and_increment(
+                    redis,
+                    day_key,
+                    self.MAX_NEW_CHATS_PER_DAY,
+                    2 * 24 * 60 * 60  # TTL = 2 дня
+                )
+                if not day_ok:
+                    # Откатываем hour_count, так как мы не смогли зарегистрировать отправку
+                    await redis.decr(hour_key)
+                    return False, (
+                        f"⚠️ Превышен лимит новых чатов в день "
+                        f"({day_count}/{self.MAX_NEW_CHATS_PER_DAY})"
+                    )
+
+                # Добавляем пользователя в set контактированных
+                await redis.sadd(users_key, user_id)
+                await redis.expire(users_key, 2 * 24 * 60 * 60)
+
+            # Обновляем локальные счетчики для статистики
+            self.message_count = hour_count
+            self.daily_new_chats = day_count if is_new_chat else self.daily_new_chats
+            self.last_message_time = now
+            self.hour_start = now.replace(minute=0, second=0, microsecond=0)
+            self.day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            logger.info(
+                f"📊 Статистика: {self.message_count}/{self.MAX_MESSAGES_PER_HOUR} сообщений/час, "
+                f"{self.daily_new_chats}/{self.MAX_NEW_CHATS_PER_DAY} новых чатов/день"
+            )
+            return True, "✅ OK"
+
         except Exception as exc:
             logger.warning(f"⚠️ Redis недоступен для anti-spam: {exc}")
             return self._try_register_in_memory(now, user_id, is_new_chat)
-
-        message_count = int(hour_value or 0)
-        daily_new_chats = int(day_value or 0)
-        if already_contacted:
-            is_new_chat = False
-
-        if message_count >= self.MAX_MESSAGES_PER_HOUR:
-            return False, (
-                f"⚠️ Превышен лимит сообщений в час "
-                f"({message_count}/{self.MAX_MESSAGES_PER_HOUR})"
-            )
-
-        if is_new_chat and daily_new_chats >= self.MAX_NEW_CHATS_PER_DAY:
-            return False, (
-                f"⚠️ Превышен лимит новых чатов в день "
-                f"({daily_new_chats}/{self.MAX_NEW_CHATS_PER_DAY})"
-            )
-
-        if last_value:
-            try:
-                last_dt = datetime.fromtimestamp(float(last_value))
-                time_since_last = (now - last_dt).total_seconds()
-                if time_since_last < self.MIN_DELAY_BETWEEN_MESSAGES:
-                    wait_time = self.MIN_DELAY_BETWEEN_MESSAGES - time_since_last
-                    return False, f"⏳ Подождите {wait_time:.1f}с перед следующим сообщением"
-            except ValueError:
-                pass
-
-        pipeline = redis.pipeline(transaction=True)
-        pipeline.incr(hour_key)
-        pipeline.expire(hour_key, 2 * 60 * 60)
-        if is_new_chat:
-            pipeline.incr(day_key)
-        pipeline.expire(day_key, 2 * 24 * 60 * 60)
-        pipeline.sadd(users_key, user_id)
-        pipeline.expire(users_key, 2 * 24 * 60 * 60)
-        pipeline.set(last_key, str(now.timestamp()))
-        pipeline.expire(last_key, max(int(self.MIN_DELAY_BETWEEN_MESSAGES * 2), 60))
-        await pipeline.execute()
-
-        self.message_count = message_count + 1
-        self.daily_new_chats = daily_new_chats + (1 if is_new_chat else 0)
-        self.last_message_time = now
-        self.hour_start = now.replace(minute=0, second=0, microsecond=0)
-        self.day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        logger.info(
-            f"📊 Статистика: {self.message_count}/{self.MAX_MESSAGES_PER_HOUR} сообщений/час, "
-            f"{self.daily_new_chats}/{self.MAX_NEW_CHATS_PER_DAY} новых чатов/день"
-        )
-        return True, "✅ OK"
 
     def _try_register_in_memory(
         self,
@@ -230,11 +403,11 @@ class AntiSpamManager:
             f"{self.daily_new_chats}/{self.MAX_NEW_CHATS_PER_DAY} новых чатов/день"
         )
         return True, "✅ OK"
-    
+
     def get_stats(self) -> dict:
         """Получить текущую статистику"""
         now = datetime.now()
-        
+
         return {
             "messages_sent_this_hour": self.message_count,
             "max_messages_per_hour": self.MAX_MESSAGES_PER_HOUR,
