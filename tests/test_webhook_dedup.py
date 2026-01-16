@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from src import api_server
 from sqlalchemy import select
 
-from src.database import init_db, SessionLocal, MessageInbox, MessageOutbox
+from src.database import init_db, ensure_default_account, SessionLocal, ChatMapping, MessageInbox, MessageOutbox
 
 
 class DummyBridge:
@@ -27,8 +27,10 @@ class DummyBridge:
 
 
 class DummyManager:
+    DEFAULT_ACCOUNT_ID = 1
+
     async def get_default_account_id(self):
-        return 1
+        return self.DEFAULT_ACCOUNT_ID
 
 
 class WebhookDedupTests(unittest.TestCase):
@@ -41,6 +43,15 @@ class WebhookDedupTests(unittest.TestCase):
             await init_db()
             async with SessionLocal() as session:
                 await session.execute(MessageInbox.__table__.delete())
+                await session.execute(ChatMapping.__table__.delete())
+                account_id = await ensure_default_account()
+                DummyManager.DEFAULT_ACCOUNT_ID = account_id
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=0,
+                    amocrm_contact_id=0,
+                    telegram_username="placeholder"
+                ))
                 await session.commit()
 
         asyncio.run(_setup())

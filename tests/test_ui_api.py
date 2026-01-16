@@ -17,7 +17,9 @@ from src import api_server
 from src.app_settings import update_settings_overrides
 from src.database import (
     init_db,
+    ensure_default_account,
     SessionLocal,
+    ChatMapping,
     UiMessageHistory,
     UiEventLog,
     Operator,
@@ -51,8 +53,8 @@ class DummyUser:
 
 
 class DummyTelegram:
-    def __init__(self):
-        self.account_id = 1
+    def __init__(self, account_id=1):
+        self.account_id = account_id
         self.client = SimpleNamespace(is_connected=lambda: True)
         self.me = DummyUser(1, "me")
         self.anti_spam = DummyAntiSpam()
@@ -157,8 +159,10 @@ class DummyBridge:
 
 
 class DummyManager:
+    DEFAULT_ACCOUNT_ID = 1
+
     def __init__(self):
-        self._client = DummyTelegram()
+        self._client = DummyTelegram(account_id=self.DEFAULT_ACCOUNT_ID)
 
     @property
     def send_count(self):
@@ -204,16 +208,28 @@ class DummyManager:
 class UiApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._original_outbox_inline = api_server.settings.OUTBOX_PROCESS_INLINE
+        api_server.settings.OUTBOX_PROCESS_INLINE = True
         db_path = "test_ui.db"
         if os.path.exists(db_path):
             os.remove(db_path)
         async def _setup():
             await init_db()
+            account_id = await ensure_default_account()
+            DummyManager.DEFAULT_ACCOUNT_ID = account_id
             async with SessionLocal() as session:
+                await session.execute(ChatMapping.__table__.delete())
                 await session.execute(UiMessageHistory.__table__.delete())
                 await session.execute(UiEventLog.__table__.delete())
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=42,
+                    amocrm_contact_id=4200,
+                    telegram_username="demo"
+                ))
+                await session.commit()
                 session.add(UiMessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=42,
                     direction="inbound",
                     message_text="hello",
@@ -232,6 +248,10 @@ class UiApiTests(unittest.TestCase):
         asyncio.run(_setup())
         api_server.set_bridge(DummyBridge())
         cls.client = TestClient(api_server.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        api_server.settings.OUTBOX_PROCESS_INLINE = cls._original_outbox_inline
 
     def _enable_admin_auth(self):
         api_server.settings.UI_BASIC_AUTH_ENABLED = True
@@ -284,12 +304,14 @@ class UiApiTests(unittest.TestCase):
         self.assertEqual(len(messages["messages"]), 1)
 
     def test_ui_send_message(self):
+        api_server.settings.OUTBOX_PROCESS_INLINE = True
         resp = self.client.post("/api/ui/send", json={"chat_id": 42, "message": "hi"})
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertTrue(data["success"])
 
     def test_ui_send_message_idempotent(self):
+        api_server.settings.OUTBOX_PROCESS_INLINE = True
         key = "idempotent-ui-1"
         api_server.bridge.telegram.send_count = 0
         resp = self.client.post(
@@ -322,7 +344,15 @@ class UiApiTests(unittest.TestCase):
 
     def test_ui_operators_list(self):
         async def _setup():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=101,
+                    amocrm_contact_id=1010,
+                    telegram_username="op-chat"
+                ))
+                await session.commit()
                 operator = Operator(
                     username="alice",
                     display_name="Alice",
@@ -336,7 +366,7 @@ class UiApiTests(unittest.TestCase):
 
                 outbox = MessageOutbox(
                     idempotency_key="op-1",
-                    account_id=1,
+                    account_id=account_id,
                     operator_id=operator.id,
                     chat_id=101,
                     payload={"text": "hi"},
@@ -405,6 +435,7 @@ class UiApiTests(unittest.TestCase):
         self.assertEqual(details["profile"]["notes"], "first contact")
 
     def test_ui_events(self):
+        api_server.settings.OUTBOX_PROCESS_INLINE = True
         self.client.post("/api/ui/send", json={"chat_id": 42, "message": "hi"})
         events = self.client.get("/api/ui/events").json()["events"]
         self.assertTrue(any(event["message"] == "send_success" for event in events))

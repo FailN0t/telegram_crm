@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_ui_history.db")
 
-from src.database import init_db, SessionLocal, UiMessageHistory
+from src.database import init_db, ensure_default_account, SessionLocal, ChatMapping, UiMessageHistory
 
 
 class UiMessageHistoryTests(unittest.TestCase):
@@ -19,9 +19,18 @@ class UiMessageHistoryTests(unittest.TestCase):
 
     def test_ui_message_history_insert(self):
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
+                await session.execute(ChatMapping.__table__.delete())
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=123,
+                    amocrm_contact_id=1230,
+                    telegram_username="demo"
+                ))
+                await session.commit()
                 entry = UiMessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=123,
                     direction="outbound",
                     message_text="hello",

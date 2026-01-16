@@ -15,6 +15,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_migration_fk.db")
 
 from src.database import (
     init_db,
+    ensure_default_account,
     engine,
     SessionLocal,
     ChatMapping,
@@ -122,6 +123,7 @@ class MigrationFKTests(unittest.TestCase):
     def test_database_integrity_after_fk_setup(self):
         """Test database integrity with FK constraints in place."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(MessageDeliveryAttempt.__table__.delete())
@@ -131,7 +133,7 @@ class MigrationFKTests(unittest.TestCase):
 
                 # Create valid parent-child relationship
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=12345,
                     amocrm_contact_id=999,
                     telegram_username="test"
@@ -141,7 +143,7 @@ class MigrationFKTests(unittest.TestCase):
 
                 outbox = MessageOutbox(
                     idempotency_key="test-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=12345,
                     payload={"text": "test"},
                     status="queued"

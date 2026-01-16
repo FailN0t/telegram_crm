@@ -68,6 +68,7 @@ class Settings(BaseSettings):
         env="DATABASE_URL"
     )
     DB_ALLOW_CREATE_ALL: bool = Field(default=False, env="DB_ALLOW_CREATE_ALL")
+    DB_USE_NULL_POOL: bool = Field(default=False, env="DB_USE_NULL_POOL")
     
     # Redis
     REDIS_URL: str = Field(

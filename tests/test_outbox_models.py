@@ -8,7 +8,9 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_outbox.db")
 
 from src.database import (
     init_db,
+    ensure_default_account,
     SessionLocal,
+    ChatMapping,
     MessageOutbox,
     MessageDeliveryAttempt
 )
@@ -32,10 +34,19 @@ class OutboxModelTests(unittest.TestCase):
 
     def test_outbox_insert_and_attempt(self):
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
+                await session.execute(ChatMapping.__table__.delete())
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=123,
+                    amocrm_contact_id=1230,
+                    telegram_username="demo"
+                ))
+                await session.commit()
                 outbox = MessageOutbox(
                     idempotency_key="key-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=123,
                     payload={"text": "hello"},
                     status="queued"
@@ -71,14 +82,32 @@ class OutboxModelTests(unittest.TestCase):
 
     def test_outbox_ordering_per_chat(self):
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 await session.execute(MessageDeliveryAttempt.__table__.delete())
                 await session.execute(MessageOutbox.__table__.delete())
+                await session.execute(ChatMapping.__table__.delete())
+                await session.commit()
+
+                session.add_all([
+                    ChatMapping(
+                        account_id=account_id,
+                        telegram_chat_id=10,
+                        amocrm_contact_id=1000,
+                        telegram_username="chat10"
+                    ),
+                    ChatMapping(
+                        account_id=account_id,
+                        telegram_chat_id=20,
+                        amocrm_contact_id=2000,
+                        telegram_username="chat20"
+                    )
+                ])
                 await session.commit()
 
                 processing = MessageOutbox(
                     idempotency_key="processing-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=10,
                     payload={"text": "processing"},
                     status="processing",
@@ -86,7 +115,7 @@ class OutboxModelTests(unittest.TestCase):
                 )
                 queued_blocked = MessageOutbox(
                     idempotency_key="queued-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=10,
                     payload={"text": "queued"},
                     status="queued",
@@ -94,7 +123,7 @@ class OutboxModelTests(unittest.TestCase):
                 )
                 queued_allowed = MessageOutbox(
                     idempotency_key="queued-2",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=20,
                     payload={"text": "queued"},
                     status="queued",
@@ -111,14 +140,24 @@ class OutboxModelTests(unittest.TestCase):
 
     def test_outbox_non_retryable(self):
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 await session.execute(MessageDeliveryAttempt.__table__.delete())
                 await session.execute(MessageOutbox.__table__.delete())
+                await session.execute(ChatMapping.__table__.delete())
+                await session.commit()
+
+                session.add(ChatMapping(
+                    account_id=account_id,
+                    telegram_chat_id=30,
+                    amocrm_contact_id=3000,
+                    telegram_username="chat30"
+                ))
                 await session.commit()
 
                 outbox = MessageOutbox(
                     idempotency_key="dead-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=30,
                     payload={"text": "fail"},
                     status="queued",

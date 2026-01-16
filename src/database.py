@@ -9,6 +9,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import NullPool
 from typing import AsyncGenerator, Optional
 from src.config import settings
 from src.logger import logger
@@ -34,6 +35,8 @@ engine_options = {
 }
 if async_db_url.startswith("sqlite+aiosqlite://"):
     engine_options["connect_args"] = {"check_same_thread": False}
+elif settings.DB_USE_NULL_POOL:
+    engine_options["poolclass"] = NullPool
 
 engine = create_async_engine(async_db_url, **engine_options)
 
@@ -201,7 +204,13 @@ class ChatProfile(Base):
         nullable=False,
         index=True
     )
-    telegram_chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    telegram_chat_id = Column(
+        BigInteger,
+        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True
+    )
     tags = Column(String(255), default="")
     notes = Column(Text, default="")
     has_consent = Column(Boolean, default=False)
@@ -238,7 +247,12 @@ class MessageOutbox(Base):
         nullable=True,
         index=True
     )
-    chat_id = Column(BigInteger, nullable=False, index=True)
+    chat_id = Column(
+        BigInteger,
+        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     payload = Column(JSON, nullable=False)
     status = Column(String(32), default="queued", index=True)
     attempts = Column(Integer, default=0)
@@ -264,7 +278,12 @@ class MessageDeliveryAttempt(Base):
     __tablename__ = "message_delivery_attempts"
 
     id = Column(Integer, primary_key=True, index=True)
-    outbox_id = Column(Integer, nullable=False, index=True)
+    outbox_id = Column(
+        Integer,
+        ForeignKey("message_outbox.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     attempt = Column(Integer, default=1)
     status = Column(String(32), default="failed", index=True)
     error_message = Column(Text)
@@ -379,7 +398,12 @@ class UiMessageHistory(Base):
         nullable=False,
         index=True
     )
-    chat_id = Column(BigInteger, nullable=False, index=True)
+    chat_id = Column(
+        BigInteger,
+        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     direction = Column(String(10), nullable=False)
     message_text = Column(Text)
     message_type = Column(String(50))
@@ -459,7 +483,13 @@ class UiChat(Base):
         nullable=False,
         index=True
     )
-    chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    chat_id = Column(
+        BigInteger,
+        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True
+    )
     username = Column(String(255), default="")
     display_name = Column(String(255), default="")
     first_name = Column(String(255), default="")

@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_fk_cascade.db")
 
 from src.database import (
     init_db,
+    ensure_default_account,
     SessionLocal,
     ChatMapping,
     ChatProfile,
@@ -52,6 +53,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_chat_mapping_deletes_message_history(self):
         """Test: Delete ChatMapping -> MessageHistory CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(MessageHistory.__table__.delete())
@@ -60,7 +62,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=12345,
                     amocrm_contact_id=999,
                     telegram_username="test_user"
@@ -71,7 +73,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create message history linked to chat
                 message = MessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_mapping_id=chat.id,
                     amocrm_contact_id=999,
                     telegram_chat_id=12345,
@@ -104,6 +106,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_chat_mapping_deletes_chat_profile(self):
         """Test: Delete ChatMapping -> ChatProfile CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(ChatProfile.__table__.delete())
@@ -112,7 +115,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=67890,
                     amocrm_contact_id=888,
                     telegram_username="profile_user"
@@ -123,7 +126,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat profile linked to chat
                 profile = ChatProfile(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=67890,
                     tags="vip,important",
                     notes="Test notes"
@@ -153,6 +156,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_outbox_deletes_delivery_attempts(self):
         """Test: Delete MessageOutbox -> MessageDeliveryAttempt CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(MessageDeliveryAttempt.__table__.delete())
@@ -162,7 +166,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=11111,
                     amocrm_contact_id=777,
                     telegram_username="outbox_user"
@@ -173,7 +177,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 # Create outbox message
                 outbox = MessageOutbox(
                     idempotency_key="test-cascade-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=11111,
                     payload={"text": "test"},
                     status="failed"
@@ -221,6 +225,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_chat_mapping_deletes_outbox(self):
         """Test: Delete ChatMapping -> MessageOutbox CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(MessageDeliveryAttempt.__table__.delete())
@@ -230,7 +235,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=22222,
                     amocrm_contact_id=666,
                     telegram_username="cascade_user"
@@ -241,14 +246,14 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 # Create outbox messages
                 outbox1 = MessageOutbox(
                     idempotency_key="cascade-outbox-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=22222,
                     payload={"text": "message 1"},
                     status="queued"
                 )
                 outbox2 = MessageOutbox(
                     idempotency_key="cascade-outbox-2",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=22222,
                     payload={"text": "message 2"},
                     status="sent"
@@ -279,6 +284,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_chat_mapping_deletes_ui_message_history(self):
         """Test: Delete ChatMapping -> UiMessageHistory CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(UiMessageHistory.__table__.delete())
@@ -287,7 +293,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=33333,
                     amocrm_contact_id=555,
                     telegram_username="ui_user"
@@ -297,7 +303,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create UI message history
                 ui_msg = UiMessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=33333,
                     direction="outbound",
                     message_text="UI test message",
@@ -328,6 +334,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_chat_mapping_deletes_ui_chat(self):
         """Test: Delete ChatMapping -> UiChat CASCADE delete."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean tables
                 await session.execute(UiChat.__table__.delete())
@@ -336,7 +343,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=44444,
                     amocrm_contact_id=444,
                     telegram_username="ui_chat_user"
@@ -346,7 +353,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create UI chat
                 ui_chat = UiChat(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=44444,
                     username="ui_chat_user",
                     display_name="Test User"
@@ -376,6 +383,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
     def test_cascade_full_chain(self):
         """Test: Delete ChatMapping cascades through entire chain."""
         async def _run():
+            account_id = await ensure_default_account()
             async with SessionLocal() as session:
                 # Clean all tables
                 await session.execute(MessageHistory.__table__.delete())
@@ -389,7 +397,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=99999,
                     amocrm_contact_id=999,
                     telegram_username="full_chain_user"
@@ -400,12 +408,12 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create all related records
                 profile = ChatProfile(
-                    account_id=1,
+                    account_id=account_id,
                     telegram_chat_id=99999,
                     tags="test"
                 )
                 message_history = MessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_mapping_id=chat.id,
                     amocrm_contact_id=999,
                     telegram_chat_id=99999,
@@ -414,19 +422,19 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 )
                 outbox = MessageOutbox(
                     idempotency_key="full-chain-1",
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=99999,
                     payload={"text": "test"},
                     status="queued"
                 )
                 ui_msg = UiMessageHistory(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=99999,
                     direction="inbound",
                     message_text="UI Test"
                 )
                 ui_chat = UiChat(
-                    account_id=1,
+                    account_id=account_id,
                     chat_id=99999,
                     username="full_chain_user"
                 )
