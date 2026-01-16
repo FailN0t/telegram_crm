@@ -192,6 +192,15 @@ SSE‑поток событий.
 }
 ```
 
+### `GET /api/admin/amocrm/status`
+Статус AmoCRM OAuth (конфигурация + наличие токенов).
+
+### `GET /api/admin/amocrm/oauth/url`
+Вернёт URL для запуска OAuth (перенаправление в AmoCRM).
+
+### `GET /api/admin/amocrm/oauth/callback`
+OAuth callback, обменивает `code` на токены и перенаправляет обратно в `/admin/settings`.
+
 ### `GET /api/admin/logs`
 Tail логов приложения.
 

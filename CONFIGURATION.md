@@ -34,6 +34,7 @@
 | `AMOCRM_REDIRECT_URI` | нет | Redirect URI | `https://your-app.example.com/oauth/callback` |
 | `AMOCRM_ACCESS_TOKEN` | нет | Access token | `access_token` |
 | `AMOCRM_REFRESH_TOKEN` | нет | Refresh token | `refresh_token` |
+| `AMOCRM_TOKEN_EXPIRES_AT` | нет | ISO timestamp истечения токена | `2026-01-16T12:00:00` |
 | `AMOCRM_WEBHOOK_SECRET` | нет | Secret для webhook | `secret` |
 | `AMOCRM_FIELD_TELEGRAM_USERNAME` | нет | ID поля username | `123456` |
 | `AMOCRM_FIELD_TELEGRAM_CHAT_ID` | нет | ID поля chat_id | `123457` |
@@ -92,6 +93,7 @@ Redis используется для:
 Admin UI (`/admin/settings`) может сохранять значения в таблицу `app_settings`.
 - Эти значения переопределяют `.env` при старте приложения/worker.
 - Для некоторых параметров требуется рестарт worker (указано в UI).
+- Через `/admin/settings` можно выполнить OAuth для AmoCRM и сохранить токены в БД.
 
 ## Compliance
 | Переменная | Обязательная | Описание | Пример |

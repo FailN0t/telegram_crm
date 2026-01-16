@@ -867,8 +867,8 @@ CREATE TABLE app_settings (
 - [ ] Или использовать JWT токены
 
 **4. Интеграция с AmoCRM OAuth (1 день)**
-- [ ] UI для OAuth авторизации AmoCRM
-- [ ] Кнопка "Connect AmoCRM"
+- [x] UI для OAuth авторизации AmoCRM
+- [x] Кнопка "Connect AmoCRM"
 
 #### Критерии приемки
 - ✅ Admin UI доступен на `/admin/`

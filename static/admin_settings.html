@@ -81,6 +81,27 @@
         </section>
 
         <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">AmoCRM OAuth</h2>
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Авторизация AmoCRM через OAuth (требуются AMOCRM_* переменные).
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button class="btn primary" id="btn-amocrm-connect">Connect AmoCRM</button>
+              <span class="result" id="amocrm-status"></span>
+            </div>
+          </div>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
+            <div>Domain: <span class="text-gray-800 dark:text-gray-200" id="amocrm-domain">--</span></div>
+            <div>Redirect URI: <span class="text-gray-800 dark:text-gray-200" id="amocrm-redirect">--</span></div>
+            <div>Token expires: <span class="text-gray-800 dark:text-gray-200" id="amocrm-expires">--</span></div>
+          </div>
+          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400" id="amocrm-config-hint"></div>
+        </section>
+
+        <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="text-xs uppercase text-gray-500 dark:text-gray-400 border-b border-border-light dark:border-border-dark">

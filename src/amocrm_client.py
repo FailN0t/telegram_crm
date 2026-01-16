@@ -27,11 +27,34 @@ class AmoCRMClient:
         self.access_token = settings.AMOCRM_ACCESS_TOKEN
         self.refresh_token = settings.AMOCRM_REFRESH_TOKEN
         self.token_expires_at = None
+        if settings.AMOCRM_TOKEN_EXPIRES_AT:
+            try:
+                token_ts = settings.AMOCRM_TOKEN_EXPIRES_AT.replace("Z", "")
+                self.token_expires_at = datetime.fromisoformat(token_ts)
+            except ValueError:
+                self.token_expires_at = None
         
         self.base_url = f'https://{self.domain}/api/v4'
         
         logger.info(f"🔗 AmoCRM клиент инициализирован для домена: {self.domain}")
-    
+
+    async def _save_tokens(self) -> None:
+        try:
+            from src.app_settings import update_settings_overrides
+            values = {}
+            if self.access_token:
+                values["AMOCRM_ACCESS_TOKEN"] = self.access_token
+            if self.refresh_token:
+                values["AMOCRM_REFRESH_TOKEN"] = self.refresh_token
+            if self.token_expires_at:
+                values["AMOCRM_TOKEN_EXPIRES_AT"] = self.token_expires_at.isoformat()
+            if values:
+                _, errors = await update_settings_overrides(values)
+                if errors:
+                    logger.warning("⚠️ Ошибка сохранения AmoCRM токенов: %s", errors)
+        except Exception as exc:
+            logger.warning("⚠️ Не удалось сохранить AmoCRM токены: %s", exc)
+
     async def ensure_token_valid(self):
         """Проверка и обновление токена если необходимо"""
         if not self.access_token or not self.refresh_token:
@@ -78,7 +101,7 @@ class AmoCRMClient:
                         logger.info("✅ Токен успешно обновлен")
                         logger.info(f"⏰ Действителен до: {self.token_expires_at}")
                         
-                        # TODO: Сохранить новые токены в .env или базу
+                        await self._save_tokens()
                         
                         return True
                     else:
@@ -88,6 +111,39 @@ class AmoCRMClient:
                         
         except Exception as e:
             logger.error(f"❌ Исключение при обновлении токена: {e}")
+            return False
+
+    async def exchange_auth_code(self, code: str) -> bool:
+        """
+        Обмен authorization code на access/refresh токены.
+        """
+        try:
+            logger.info("🔄 Обмен authorization code на токены AmoCRM...")
+            async with aiohttp.ClientSession() as session:
+                data = {
+                    'client_id': self.client_id,
+                    'client_secret': self.client_secret,
+                    'grant_type': 'authorization_code',
+                    'code': code,
+                    'redirect_uri': self.redirect_uri,
+                }
+                async with session.post(
+                    f'https://{self.domain}/oauth2/access_token',
+                    json=data
+                ) as response:
+                    if response.status == 200:
+                        tokens = await response.json()
+                        self.access_token = tokens['access_token']
+                        self.refresh_token = tokens['refresh_token']
+                        self.token_expires_at = datetime.now() + timedelta(seconds=tokens['expires_in'])
+                        await self._save_tokens()
+                        logger.info("✅ AmoCRM токены успешно получены")
+                        return True
+                    error_text = await response.text()
+                    logger.error(f"❌ Ошибка OAuth обмена: {error_text}")
+                    return False
+        except Exception as e:
+            logger.error(f"❌ Исключение при OAuth обмене: {e}")
             return False
     
     async def find_contact_by_phone(self, phone: str) -> Optional[Dict]:
@@ -401,4 +457,3 @@ class AmoCRMClient:
         except Exception as e:
             logger.error(f"❌ Исключение при завершении задачи: {e}")
             return False
-

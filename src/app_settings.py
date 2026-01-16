@@ -59,6 +59,21 @@ ALLOWED_SETTINGS: Dict[str, Dict[str, Any]] = {
         "description": "Пауза worker между проверками outbox (сек).",
         "requires_restart": True,
     },
+    "AMOCRM_ACCESS_TOKEN": {
+        "type": str,
+        "description": "AmoCRM access token (OAuth).",
+        "requires_restart": False,
+    },
+    "AMOCRM_REFRESH_TOKEN": {
+        "type": str,
+        "description": "AmoCRM refresh token (OAuth).",
+        "requires_restart": False,
+    },
+    "AMOCRM_TOKEN_EXPIRES_AT": {
+        "type": str,
+        "description": "AmoCRM token expiry timestamp (ISO8601).",
+        "requires_restart": False,
+    },
 }
 
 BASELINE_VALUES = {key: getattr(settings, key) for key in ALLOWED_SETTINGS.keys()}

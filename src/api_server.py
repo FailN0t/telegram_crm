@@ -8,7 +8,7 @@ import time
 from collections import deque
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -34,6 +34,7 @@ from src.database import (
     UiMessageHistory,
     UiEventLog,
     AuditLog,
+    AppSetting,
     SessionLocal
 )
 from src.app_settings import (
@@ -43,6 +44,7 @@ from src.app_settings import (
     get_settings_payload
 )
 from src.bridge import AmoCRMTelegramBridge
+from src.amocrm_client import AmoCRMClient
 from src.outbox import (
     build_idempotency_key,
     enqueue_outbox,
@@ -176,6 +178,7 @@ class AdminSettingsUpdateRequest(BaseModel):
 bridge: Optional[AmoCRMTelegramBridge] = None
 basic_scheme = HTTPBasic(auto_error=False)
 _ui_users_cache = {"raw": None, "parsed": {}}
+AMOCRM_STATE_KEY = "AMOCRM_OAUTH_STATE"
 
 
 async def log_ui_event(level: str, message: str, data: Optional[dict] = None) -> dict:
@@ -218,6 +221,32 @@ async def log_audit_event(
             await session.commit()
     except Exception as exc:
         logger.warning(f"⚠️ Не удалось сохранить audit log: {exc}")
+
+
+async def set_app_setting(key: str, value: dict) -> None:
+    async with SessionLocal() as session:
+        record = await session.get(AppSetting, key)
+        if record:
+            record.value = value
+        else:
+            session.add(AppSetting(key=key, value=value))
+        await session.commit()
+
+
+async def get_app_setting(key: str) -> Optional[dict]:
+    async with SessionLocal() as session:
+        record = await session.get(AppSetting, key)
+        if not record:
+            return None
+        return record.value if isinstance(record.value, dict) else None
+
+
+async def delete_app_setting(key: str) -> None:
+    async with SessionLocal() as session:
+        record = await session.get(AppSetting, key)
+        if record:
+            await session.delete(record)
+            await session.commit()
 
 
 def get_ui_users() -> dict:
@@ -1120,6 +1149,84 @@ def create_app() -> FastAPI:
             "requires_restart": bool(restart_keys),
             "restart_keys": restart_keys,
         }
+
+    @app.get("/api/admin/amocrm/status", tags=["Admin"])
+    async def admin_amocrm_status(ui_user: dict = Depends(require_admin)):
+        """Статус AmoCRM OAuth."""
+        await refresh_settings_from_db()
+        configured = all([
+            settings.AMOCRM_DOMAIN,
+            settings.AMOCRM_CLIENT_ID,
+            settings.AMOCRM_CLIENT_SECRET,
+            settings.AMOCRM_REDIRECT_URI,
+        ])
+        has_tokens = bool(settings.AMOCRM_ACCESS_TOKEN and settings.AMOCRM_REFRESH_TOKEN)
+        return {
+            "configured": configured,
+            "domain": settings.AMOCRM_DOMAIN,
+            "redirect_uri": settings.AMOCRM_REDIRECT_URI,
+            "has_tokens": has_tokens,
+            "token_expires_at": settings.AMOCRM_TOKEN_EXPIRES_AT,
+        }
+
+    @app.get("/api/admin/amocrm/oauth/url", tags=["Admin"])
+    async def admin_amocrm_oauth_url(ui_user: dict = Depends(require_admin)):
+        """Сгенерировать URL для AmoCRM OAuth."""
+        if not all([
+            settings.AMOCRM_DOMAIN,
+            settings.AMOCRM_CLIENT_ID,
+            settings.AMOCRM_CLIENT_SECRET,
+            settings.AMOCRM_REDIRECT_URI,
+        ]):
+            raise HTTPException(status_code=400, detail="amocrm_config_missing")
+
+        state = secrets.token_urlsafe(16)
+        await set_app_setting(
+            AMOCRM_STATE_KEY,
+            {"state": state, "created_at": datetime.utcnow().isoformat() + "Z"}
+        )
+        url = (
+            f"https://{settings.AMOCRM_DOMAIN}/oauth"
+            f"?client_id={settings.AMOCRM_CLIENT_ID}"
+            f"&redirect_uri={settings.AMOCRM_REDIRECT_URI}"
+            f"&state={state}"
+            f"&mode=post_message"
+        )
+        return {"url": url}
+
+    @app.get("/api/admin/amocrm/oauth/callback", tags=["Admin"])
+    async def admin_amocrm_oauth_callback(
+        code: Optional[str] = None,
+        state: Optional[str] = None,
+        ui_user: dict = Depends(require_admin)
+    ):
+        """OAuth callback для AmoCRM."""
+        if not code:
+            raise HTTPException(status_code=400, detail="code_required")
+
+        stored = await get_app_setting(AMOCRM_STATE_KEY)
+        if stored:
+            if not state or stored.get("state") != state:
+                await delete_app_setting(AMOCRM_STATE_KEY)
+                raise HTTPException(status_code=400, detail="invalid_state")
+
+        if bridge and bridge.amocrm:
+            success = await bridge.amocrm.exchange_auth_code(code)
+        else:
+            client = AmoCRMClient()
+            success = await client.exchange_auth_code(code)
+
+        await delete_app_setting(AMOCRM_STATE_KEY)
+
+        await log_audit_event(
+            "amocrm_oauth_exchange",
+            ui_user,
+            data={"success": success}
+        )
+
+        if not success:
+            return RedirectResponse(url="/admin/settings?amocrm=error")
+        return RedirectResponse(url="/admin/settings?amocrm=success")
 
     @app.get("/api/admin/logs", tags=["Admin"])
     async def admin_logs(

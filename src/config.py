@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     AMOCRM_REDIRECT_URI: Optional[str] = Field(default=None, env="AMOCRM_REDIRECT_URI")
     AMOCRM_ACCESS_TOKEN: Optional[str] = Field(default=None, env="AMOCRM_ACCESS_TOKEN")
     AMOCRM_REFRESH_TOKEN: Optional[str] = Field(default=None, env="AMOCRM_REFRESH_TOKEN")
+    AMOCRM_TOKEN_EXPIRES_AT: Optional[str] = Field(default=None, env="AMOCRM_TOKEN_EXPIRES_AT")
     AMOCRM_WEBHOOK_SECRET: Optional[str] = Field(default=None, env="AMOCRM_WEBHOOK_SECRET")
     
     # AmoCRM Custom Fields IDs

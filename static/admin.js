@@ -462,6 +462,55 @@ async function loadSettings() {
   }
 }
 
+async function loadAmoCRMStatus() {
+  const statusEl = document.getElementById("amocrm-status");
+  const domainEl = document.getElementById("amocrm-domain");
+  const redirectEl = document.getElementById("amocrm-redirect");
+  const expiresEl = document.getElementById("amocrm-expires");
+  const hintEl = document.getElementById("amocrm-config-hint");
+  const connectBtn = document.getElementById("btn-amocrm-connect");
+
+  if (!statusEl) return;
+
+  setStatus(statusEl, null, "Loading...");
+  try {
+    const data = await fetchJson("/api/admin/amocrm/status");
+    domainEl.textContent = data.domain || "--";
+    redirectEl.textContent = data.redirect_uri || "--";
+    expiresEl.textContent = data.token_expires_at || "--";
+    if (!data.configured) {
+      hintEl.textContent = "AmoCRM config missing. Проверьте AMOCRM_DOMAIN/CLIENT_ID/CLIENT_SECRET/REDIRECT_URI.";
+      if (connectBtn) connectBtn.disabled = true;
+      setStatus(statusEl, false, "Not configured");
+    } else if (!data.has_tokens) {
+      hintEl.textContent = "Нет токенов. Нажмите Connect AmoCRM.";
+      if (connectBtn) connectBtn.disabled = false;
+      setStatus(statusEl, false, "Not authorized");
+    } else {
+      hintEl.textContent = "Токены сохранены.";
+      if (connectBtn) connectBtn.disabled = false;
+      setStatus(statusEl, true, "Authorized");
+    }
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
+async function connectAmoCRM() {
+  const statusEl = document.getElementById("amocrm-status");
+  setStatus(statusEl, null, "Redirecting...");
+  try {
+    const data = await fetchJson("/api/admin/amocrm/oauth/url");
+    if (data.url) {
+      window.location.href = data.url;
+      return;
+    }
+    setStatus(statusEl, false, "Missing OAuth URL");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
 const refreshButton = document.getElementById("btn-refresh");
 if (refreshButton) {
   refreshButton.addEventListener("click", () => {
@@ -483,6 +532,17 @@ if (page === "accounts") {
 }
 if (page === "settings") {
   loadSettings();
+  loadAmoCRMStatus();
+  const connectBtn = document.getElementById("btn-amocrm-connect");
+  if (connectBtn) {
+    connectBtn.addEventListener("click", connectAmoCRM);
+  }
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("amocrm") === "success") {
+    setStatus(document.getElementById("amocrm-status"), true, "Authorized");
+  } else if (urlParams.get("amocrm") === "error") {
+    setStatus(document.getElementById("amocrm-status"), false, "OAuth failed");
+  }
 }
 if (page === "logs") {
   const refreshLogs = document.getElementById("btn-refresh-logs");
