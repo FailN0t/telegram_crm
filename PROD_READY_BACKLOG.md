@@ -292,6 +292,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Мониторинг — знаем о проблемах до пользователей
 - [x] Бэкапы — RPO/RTO заданы и проверяются
 - [x] API rate limiting — защита /api/* по лимитам
+- [x] DB indexes review — индексы для горячих запросов
 
 ### Улучшения (NICE TO HAVE)
 - [x] HTML вынесен из Python

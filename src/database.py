@@ -253,6 +253,8 @@ class MessageOutbox(Base):
         Index('idx_message_outbox_operator_id', 'operator_id'),
         Index('idx_message_outbox_chat_id', 'chat_id'),
         Index('idx_message_outbox_status', 'status'),
+        Index('idx_message_outbox_next_attempt_at', 'next_attempt_at'),
+        Index('idx_message_outbox_status_next_attempt', 'status', 'next_attempt_at'),
     )
 
 
@@ -290,6 +292,7 @@ class MessageInbox(Base):
     __table_args__ = (
         Index('idx_message_inbox_idempotency_key', 'idempotency_key'),
         Index('idx_message_inbox_source', 'source'),
+        Index('idx_message_inbox_created_at', 'created_at'),
     )
 
 
@@ -398,6 +401,7 @@ class UiMessageHistory(Base):
         Index('idx_ui_message_history_status', 'status'),
         Index('idx_ui_message_history_created_at', 'created_at'),
         Index('idx_ui_message_history_updated_at', 'updated_at'),
+        Index('idx_ui_message_history_account_chat_created', 'account_id', 'chat_id', 'created_at'),
     )
 
 
@@ -475,6 +479,7 @@ class UiChat(Base):
         Index('idx_ui_chats_chat_id', 'chat_id'),
         Index('idx_ui_chats_last_timestamp', 'last_timestamp'),
         Index('idx_ui_chats_unread', 'unread_count'),
+        Index('idx_ui_chats_account_last_timestamp', 'account_id', 'last_timestamp'),
     )
 
 

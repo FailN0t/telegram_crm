@@ -1390,7 +1390,7 @@ result = db.query(UiChat).filter(...).first()  # Синхронный query в a
 - [ ] Disaster Recovery Plan (1 день - документация)
 - [ ] Distributed tracing (2-3 дня)
 - [x] API rate limiting (1 день)
-- [ ] DB indexes review (1-2 дня)
+- [x] DB indexes review (1-2 дня)
 
 #### User Experience (2-3 дня)
 - [ ] User training materials (1-2 дня)
