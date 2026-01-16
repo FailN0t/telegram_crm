@@ -296,6 +296,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Timezone в quiet-hours
 - [x] Лимиты per operator
 - [x] Admin UI (/admin, /admin/accounts, /admin/settings, templates/tags)
+- [x] Нагрузочные тесты (Locust сценарий + PERF_REPORT.md)
 
 ---
 

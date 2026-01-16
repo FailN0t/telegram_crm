@@ -43,3 +43,18 @@ python3 test_demo.py
 4) `Redis недоступен: Authentication required` (warning)
 - Причина: Redis требует пароль, но он не указан в тестовом окружении.
 - Решение: указать `REDIS_URL` с паролем или игнорировать предупреждение.
+
+## Нагрузочное тестирование
+Locust сценарии лежат в `tests/load/`.
+
+### Быстрый запуск
+```bash
+locust -f tests/load/locustfile.py --host http://localhost:8000
+```
+
+### Headless пример
+```bash
+UI_LOAD_USER=admin UI_LOAD_PASS=pass UI_LOAD_CHAT_ID=42 \
+locust -f tests/load/locustfile.py --host http://localhost:8000 \
+  --headless -u 50 -r 5 -t 2m --csv perf_results/ui
+```
