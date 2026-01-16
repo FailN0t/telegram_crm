@@ -1,0 +1,17 @@
+# MTProto API через Telethon
+telethon==1.35.0
+
+# HTTP клиент для AmoCRM API
+aiohttp==3.9.1
+
+# Переменные окружения
+python-dotenv==1.0.0
+
+# Веб-сервер для API endpoints (опционально)
+fastapi==0.108.0
+uvicorn==0.25.0
+
+# База данных (опционально)
+# asyncpg==0.29.0  # PostgreSQL async
+# motor==3.3.2  # MongoDB async
+

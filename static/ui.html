@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Telegram CRM Console</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#229ED9",
+              secondary: "#101827",
+              "background-light": "#F3F4F6",
+              "background-dark": "#0B1120",
+              "surface-light": "#FFFFFF",
+              "surface-dark": "#1F2937",
+              "border-light": "#E5E7EB",
+              "border-dark": "#374151",
+            },
+            fontFamily: {
+              display: ["Inter", "sans-serif"],
+              body: ["Inter", "sans-serif"],
+            },
+            borderRadius: {
+              DEFAULT: "0.5rem",
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="/static/styles.min.css?v=20260114" />
+  </head>
+  <body class="bg-background-light dark:bg-background-dark text-gray-800 dark:text-gray-100 h-screen flex flex-col overflow-hidden font-body transition-colors duration-200">
+    <header class="h-14 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark flex items-center justify-between px-4 shrink-0 z-20">
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="material-icons-outlined text-primary text-2xl">dns</span>
+          <h1 class="font-bold text-lg tracking-tight">Telegram Console</h1>
+        </div>
+        <div class="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-2"></div>
+        <div class="flex items-center gap-2 text-sm">
+          <div class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+          </div>
+          <span class="text-green-600 dark:text-green-400 font-medium">System Online</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+        <div class="hidden md:flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full">
+          <span class="material-icons-outlined text-sm">speed</span>
+          <span>Anti-Spam: <span class="font-semibold text-gray-700 dark:text-gray-200" id="status-limits">--</span></span>
+        </div>
+        <div class="hidden md:flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full">
+          <span class="material-icons-outlined text-sm">timer</span>
+          <span>Delay: <span class="font-semibold text-gray-700 dark:text-gray-200" id="status-limits-meta">--</span></span>
+        </div>
+        <div class="relative hidden md:block">
+          <button class="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" id="btn-status-toggle" title="Status">
+            <span class="material-icons-outlined text-sm">insights</span>
+            <span>Status</span>
+          </button>
+          <div class="hidden absolute right-0 mt-2 w-72 bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl shadow-lg p-3 text-xs text-gray-600 dark:text-gray-300 status-panel" id="status-panel">
+            <div class="space-y-3">
+              <div>
+                <div class="text-[10px] uppercase text-gray-400">Connection</div>
+                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100" id="status-connection">--</div>
+                <div class="text-[11px]" id="status-connection-meta">--</div>
+              </div>
+              <div class="border-t border-border-light dark:border-border-dark"></div>
+              <div>
+                <div class="text-[10px] uppercase text-gray-400">Authorization</div>
+                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100" id="status-auth">--</div>
+                <div class="text-[11px]" id="status-user">--</div>
+              </div>
+              <div class="border-t border-border-light dark:border-border-dark"></div>
+              <div>
+                <div class="text-[10px] uppercase text-gray-400">Session</div>
+                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100" id="status-session">--</div>
+                <div class="text-[11px]" id="status-session-meta">--</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3 ml-4 border-l border-border-light dark:border-border-dark pl-4">
+          <a class="hover:text-primary transition-colors" href="/ui/auth" title="Auth">
+            <span class="material-icons-outlined">vpn_key</span>
+          </a>
+          <button class="hover:text-primary transition-colors" id="btn-refresh" title="Refresh">
+            <span class="material-icons-outlined">refresh</span>
+          </button>
+          <button class="hover:text-primary transition-colors" id="btn-logout" title="Logout">
+            <span class="material-icons-outlined">logout</span>
+          </button>
+          <button class="hover:text-primary transition-colors" id="btn-theme" title="Toggle Theme">
+            <span class="material-icons-outlined">dark_mode</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    
+
+    <div class="px-4">
+      <div class="auth-banner" id="auth-banner">
+        Авторизация не выполнена. Откройте <a href="/ui/auth">/ui/auth</a> и войдите.
+      </div>
+
+      <div class="onboarding" id="onboarding">
+        <div class="onboarding-card">
+          <h3>Первый запуск</h3>
+          <ol>
+            <li id="step-auth">Перейдите на /ui/auth и запросите код</li>
+            <li id="step-code">Введите код и 2FA (если включен)</li>
+            <li id="step-back">Вернитесь в консоль и начните чат</li>
+          </ol>
+          <div class="actions" style="margin-top:10px;">
+            <a class="btn primary" href="/ui/auth">Открыть авторизацию</a>
+            <button class="btn" id="btn-recheck">Проверить статус</button>
+          </div>
+        </div>
+        <div class="onboarding-card secondary" id="onboarding-empty">
+          <h3>Пока нет диалогов</h3>
+          <p class="notice">Начните новый чат справа или используйте поиск по существующим.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-1 overflow-hidden">
+      <nav class="w-16 flex flex-col items-center py-4 gap-4 bg-secondary text-white shrink-0 z-30 accounts-bar" id="accounts-panel">
+        <button class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white shadow-lg ring-2 ring-white/20 hover:scale-105 transition-transform" title="Main Account">
+          <span class="font-bold text-sm">TG</span>
+        </button>
+        <div class="w-10 h-10 rounded-xl bg-gray-700 flex items-center justify-center text-gray-300 hover:bg-gray-600 hover:text-white transition-colors cursor-pointer" title="Support Account">
+          <span class="font-bold text-sm">S1</span>
+        </div>
+        <div class="w-10 h-10 rounded-xl bg-gray-700 flex items-center justify-center text-gray-300 hover:bg-gray-600 hover:text-white transition-colors cursor-pointer" title="Sales Account">
+          <span class="font-bold text-sm">S2</span>
+        </div>
+        <div class="mt-auto flex flex-col gap-4">
+          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors" id="btn-collapse-accounts" class="collapse-handle" title="Collapse">
+            <span class="material-icons-outlined text-lg">chevron_left</span>
+          </button>
+          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors" title="Add account">
+            <span class="material-icons-outlined text-lg">add</span>
+          </button>
+          <button class="w-10 h-10 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors" title="Settings">
+            <span class="material-icons-outlined text-lg">settings</span>
+          </button>
+        </div>
+        <div class="hidden" id="account-name"></div>
+        <div class="hidden" id="account-phone"></div>
+        <div class="hidden" id="account-status"></div>
+        <div class="hidden" id="account-limits"></div>
+        <div class="hidden" id="account-list"></div>
+        <div class="hidden" id="empty-accounts"></div>
+      </nav>
+
+      <aside class="w-80 bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark flex flex-col shrink-0">
+        <div class="p-4 border-b border-border-light dark:border-border-dark space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="font-bold text-lg">Chats <span class="text-xs font-normal text-gray-500 ml-1 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full" id="chat-count">0</span></h2>
+            <button class="text-gray-400 hover:text-primary" title="Filters"><span class="material-icons-outlined text-sm">filter_list</span></button>
+          </div>
+          <div class="relative">
+            <span class="material-icons-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">search</span>
+            <input class="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-lg py-2 pl-9 pr-4 text-sm focus:ring-1 focus:ring-primary placeholder-gray-500 dark:placeholder-gray-400" id="chat-search" placeholder="Search chats..." type="text" />
+          </div>
+          <div class="flex gap-2 overflow-x-auto pb-1 no-scrollbar chat-filters" id="chat-filters">
+            <button class="px-3 py-1 bg-primary text-white text-xs rounded-full shadow-sm whitespace-nowrap chip active" data-filter="all">All</button>
+            <button class="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-xs rounded-full hover:bg-gray-50 dark:hover:bg-gray-600 whitespace-nowrap chip" data-filter="unread">Unread</button>
+            <button class="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-xs rounded-full hover:bg-gray-50 dark:hover:bg-gray-600 whitespace-nowrap chip" data-filter="new">New</button>
+            <button class="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-red-500 dark:text-red-400 text-xs rounded-full hover:bg-gray-50 dark:hover:bg-gray-600 whitespace-nowrap chip" data-filter="errors">Errors</button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto" id="chat-list"></div>
+        <div class="empty-state mx-4 mb-4" id="empty-chats">
+          <strong>Нет чатов</strong>
+          <p>Авторизуйтесь и начните новый диалог справа.</p>
+        </div>
+      </aside>
+
+      <main class="flex-1 flex flex-col bg-gray-50 dark:bg-black/20 min-w-0">
+        <div class="h-16 px-6 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-3">
+            <div class="font-bold text-gray-900 dark:text-white flex flex-col">
+              <span class="text-base" id="active-title">Выберите чат</span>
+              <span class="text-xs font-normal text-green-600 dark:text-green-400" id="active-meta">Нет активного диалога</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-3 text-gray-400">
+            <button class="hover:text-primary transition-colors" title="Search"><span class="material-icons-outlined">search</span></button>
+            <button class="hover:text-primary transition-colors" title="More"><span class="material-icons-outlined">more_vert</span></button>
+            <button class="hover:text-primary transition-colors" id="btn-clear" title="Clear"><span class="material-icons-outlined">close</span></button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-6" id="message-list" style="display:flex;flex-direction:column;gap:12px;"></div>
+        <div class="empty-state mx-6" id="empty-conversation">
+          <strong>Диалог не выбран</strong>
+          <p>Выберите чат слева или начните новый диалог справа.</p>
+        </div>
+
+        <div class="p-4 bg-surface-light dark:bg-surface-dark border-t border-border-light dark:border-border-dark shrink-0">
+          <div class="flex items-end gap-2 bg-gray-100 dark:bg-gray-800 rounded-xl p-2 border border-transparent focus-within:border-primary focus-within:ring-1 focus-within:ring-primary transition-all">
+            <button class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="Attach">
+              <span class="material-icons-outlined">attach_file</span>
+            </button>
+            <textarea class="flex-1 bg-transparent border-none focus:ring-0 text-sm text-gray-800 dark:text-gray-100 placeholder-gray-500 resize-none py-2.5 max-h-32" id="message-text" placeholder="Write a message..." rows="1"></textarea>
+            <button class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" title="Emoji">
+              <span class="material-icons-outlined">sentiment_satisfied_alt</span>
+            </button>
+            <button class="p-2 bg-primary text-white rounded-lg hover:bg-blue-600 shadow-sm transition-colors" id="btn-send" title="Send">
+              <span class="material-icons-outlined">send</span>
+            </button>
+          </div>
+          <div class="flex items-center gap-3 mt-2 px-1">
+            <span class="text-xs text-gray-400">Shift + Enter to send</span>
+            <button class="btn ghost" id="btn-retry" style="display:none;">Retry last</button>
+            <span class="notice" id="send-hint">Выберите чат, чтобы ответить.</span>
+          </div>
+          <div class="result" id="send-result"></div>
+        </div>
+      </main>
+
+      <aside class="w-80 bg-surface-light dark:bg-surface-dark border-l border-border-light dark:border-border-dark flex flex-col shrink-0 overflow-y-auto">
+        <div class="p-5 border-b border-border-light dark:border-border-dark">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-gray-800 dark:text-white">Contact Details</h3>
+            <button class="text-primary text-sm font-medium hover:underline" id="btn-refresh-contact">Edit</button>
+          </div>
+          <div class="empty-state" id="contact-empty">
+            <strong>Выберите чат</strong>
+            <p>Здесь появятся данные контакта, теги и история.</p>
+          </div>
+          <div class="contact-body" id="contact-body">
+            <div class="text-center mb-4">
+              <div class="w-20 h-20 rounded-full mx-auto mb-3 shadow-md bg-gradient-to-br from-blue-200 to-emerald-200"></div>
+              <h2 class="text-lg font-bold text-gray-900 dark:text-white" id="contact-name">--</h2>
+              <p class="text-sm text-gray-500" id="contact-username">--</p>
+            </div>
+            <div class="space-y-3">
+              <div class="flex items-center gap-3 text-sm">
+                <span class="material-icons-outlined text-gray-400">phone</span>
+                <span class="text-gray-700 dark:text-gray-300" id="contact-phone">--</span>
+              </div>
+              <div class="flex items-center gap-3 text-sm">
+                <span class="material-icons-outlined text-gray-400">tag</span>
+                <span class="text-gray-700 dark:text-gray-300" id="contact-id">--</span>
+              </div>
+            </div>
+            <div class="mt-6">
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block" for="contact-tags">Tags</label>
+              <input id="contact-tags" class="w-full" placeholder="vip, lead" />
+            </div>
+            <div class="mt-4">
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block" for="contact-notes">Notes</label>
+              <textarea id="contact-notes" class="w-full" rows="3" placeholder="Короткие заметки"></textarea>
+            </div>
+            <div class="consent-row mt-3">
+              <label><input type="checkbox" id="contact-consent" /> Consent</label>
+              <label><input type="checkbox" id="contact-optout" /> Opt-out</label>
+            </div>
+            <div class="quiet-grid mt-3">
+              <input id="quiet-start" placeholder="Quiet start (HH:MM)" />
+              <input id="quiet-end" placeholder="Quiet end (HH:MM)" />
+              <input id="contact-timezone" placeholder="Timezone (e.g. UTC)" />
+            </div>
+            <div class="composer-actions mt-3">
+              <button class="btn primary" id="btn-save-profile">Save</button>
+              <div class="result" id="profile-result"></div>
+            </div>
+            <div class="history-grid mt-4">
+              <div class="history-item">
+                <span>Всего</span>
+                <strong id="history-total">0</strong>
+              </div>
+              <div class="history-item">
+                <span>Входящих</span>
+                <strong id="history-inbound">0</strong>
+              </div>
+              <div class="history-item">
+                <span>Исходящих</span>
+                <strong id="history-outbound">0</strong>
+              </div>
+              <div class="history-item">
+                <span>Последний входящий</span>
+                <strong id="history-last-in">--</strong>
+              </div>
+              <div class="history-item">
+                <span>Последний исходящий</span>
+                <strong id="history-last-out">--</strong>
+              </div>
+            </div>
+            <div class="recent-list" id="recent-list"></div>
+          </div>
+        </div>
+
+        <div class="p-5 border-b border-border-light dark:border-border-dark">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-gray-800 dark:text-white">Quick Replies</h3>
+            <button class="text-gray-400 hover:text-primary"><span class="material-icons-outlined text-sm">settings</span></button>
+          </div>
+          <div class="space-y-2.5" id="template-list"></div>
+        </div>
+
+        <div class="p-5 border-b border-border-light dark:border-border-dark">
+          <h3 class="font-bold text-gray-800 dark:text-white mb-3">New Chat</h3>
+          <div class="space-y-2">
+            <input id="new-username" placeholder="@username" />
+            <input id="new-phone" placeholder="+79991234567" />
+            <textarea id="new-message" rows="3" placeholder="Первое сообщение"></textarea>
+            <button class="btn primary w-full" id="btn-send-new">Start chat</button>
+            <div class="result" id="new-result"></div>
+            <div class="notice" id="anti-spam-hint">Соблюдайте лимиты антиспама.</div>
+          </div>
+        </div>
+
+        <div class="p-5 border-b border-border-light dark:border-border-dark">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-gray-800 dark:text-white">Operator Log</h3>
+            <button class="text-gray-400 hover:text-primary" id="btn-refresh-events">
+              <span class="material-icons-outlined text-sm">refresh</span>
+            </button>
+          </div>
+          <div class="event-list" id="event-list"></div>
+        </div>
+
+        <div class="p-5">
+          <h3 class="font-bold text-gray-800 dark:text-white mb-3">CRM Actions</h3>
+          <div class="grid grid-cols-2 gap-2">
+            <button class="flex flex-col items-center justify-center gap-1 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 transition-colors">
+              <span class="material-icons-outlined text-lg">note_add</span>
+              Add Note
+            </button>
+            <button class="flex flex-col items-center justify-center gap-1 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 transition-colors">
+              <span class="material-icons-outlined text-lg">schedule</span>
+              Reminder
+            </button>
+            <button class="flex flex-col items-center justify-center gap-1 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 transition-colors">
+              <span class="material-icons-outlined text-lg">inventory</span>
+              Create Deal
+            </button>
+            <button class="flex flex-col items-center justify-center gap-1 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 transition-colors">
+              <span class="material-icons-outlined text-lg">block</span>
+              Block
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/static/app.min.js?v=20260114"></script>
+  </body>
+</html>

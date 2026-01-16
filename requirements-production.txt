@@ -1,0 +1,36 @@
+# Core dependencies
+telethon==1.35.0
+fastapi==0.108.0
+uvicorn[standard]==0.25.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Database
+sqlalchemy[asyncio]==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+aiosqlite==0.20.0
+
+# HTTP клиент
+aiohttp==3.9.1
+httpx==0.25.2
+
+# Redis (для кэширования и очередей)
+redis==5.0.1
+
+# MinIO (media storage)
+minio==7.2.7
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==41.0.7
+
+# Monitoring
+prometheus-client==0.19.0
+sentry-sdk==1.39.2
+
+# Utilities
+python-multipart==0.0.6

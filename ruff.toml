@@ -1,0 +1,12 @@
+line-length = 120
+target-version = "py311"
+
+select = ["F401"]
+
+exclude = [
+  ".git",
+  "__pycache__",
+  "alembic/versions",
+  "sessions",
+  "logs",
+]

@@ -1,0 +1,46 @@
+# Production Dockerfile для MTProto приложения
+
+FROM python:3.11-slim
+
+# Метаданные
+LABEL maintainer="your-email@example.com"
+LABEL description="AmoCRM Telegram MTProto Integration"
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Рабочая директория
+WORKDIR /app
+
+# Копируем requirements и устанавливаем зависимости
+COPY requirements-production.txt .
+RUN pip install --no-cache-dir -r requirements-production.txt
+
+# Копируем код приложения
+COPY src/ ./src/
+COPY static/ ./static/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+
+# Создаем директории
+RUN mkdir -p /app/logs /app/sessions
+
+# Создаем непривилегированного пользователя
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Переключаемся на непривилегированного пользователя
+USER appuser
+
+# Порт API сервера
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5.0)" || exit 1
+
+# Запуск приложения
+CMD ["python", "-m", "src.main"]

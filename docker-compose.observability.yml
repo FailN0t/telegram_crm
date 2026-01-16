@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.48.1
+    container_name: amocrm-telegram-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - app-network
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: amocrm-telegram-alertmanager
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    networks:
+      - app-network
+
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: amocrm-telegram-loki
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - app-network
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    container_name: amocrm-telegram-promtail
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - ./logs:/var/log/app:ro
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: amocrm-telegram-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true
+
+volumes:
+  loki_data:
+  grafana_data:
