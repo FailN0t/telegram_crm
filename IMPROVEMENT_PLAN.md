@@ -1387,7 +1387,7 @@ result = db.query(UiChat).filter(...).first()  # Синхронный query в a
 - [x] Secrets management (1-2 дня)
 
 #### Operational Excellence (4-6 дней)
-- [ ] Disaster Recovery Plan (1 день - документация)
+- [x] Disaster Recovery Plan (1 день - документация)
 - [ ] Distributed tracing (2-3 дня)
 - [x] API rate limiting (1 день)
 - [x] DB indexes review (1-2 дня)

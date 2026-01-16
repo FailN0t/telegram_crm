@@ -28,7 +28,7 @@
 
 ### Бэкапы и восстановление
 - [ ] Бэкап БД создан
-- [ ] Проверка восстановления (backup‑drill)
+- [ ] Проверка восстановления (backup‑drill, см. `DR_DRILL.md`)
 
 ## После релиза
 - [ ] Проверить логи `docker-compose -f docker-compose.production.yml logs -f app`

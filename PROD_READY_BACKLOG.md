@@ -284,6 +284,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Data retention — политика хранения + очистка audit log
 - [x] Foreign Keys — целостность БД
 - [x] Graceful shutdown — нет потерь при деплое
+- [x] DR drill чек-лист — `DR_DRILL.md`
 
 ### Важные (SHOULD HAVE)
 - [x] WebSocket/SSE — realtime UI без polling
