@@ -14,13 +14,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_ui.db")
 from fastapi.testclient import TestClient
 
 from src import api_server
+from src.app_settings import update_settings_overrides
 from src.database import (
     init_db,
     SessionLocal,
     UiMessageHistory,
     UiEventLog,
     Operator,
-    MessageOutbox
+    MessageOutbox,
+    AppSetting
 )
 
 
@@ -195,6 +197,9 @@ class DummyManager:
     async def get_client(self, account_id):
         return self._client
 
+    def apply_antispam_limits(self, max_messages_per_hour, max_new_chats_per_day, min_delay_between_messages):
+        return None
+
 
 class UiApiTests(unittest.TestCase):
     @classmethod
@@ -227,6 +232,17 @@ class UiApiTests(unittest.TestCase):
         asyncio.run(_setup())
         api_server.set_bridge(DummyBridge())
         cls.client = TestClient(api_server.app)
+
+    def _enable_admin_auth(self):
+        api_server.settings.UI_BASIC_AUTH_ENABLED = True
+        api_server.settings.UI_BASIC_AUTH_USERS = "admin:pass:admin,operator:pass:operator"
+        api_server._ui_users_cache["raw"] = None
+        return ("admin", "pass")
+
+    def _disable_admin_auth(self):
+        api_server.settings.UI_BASIC_AUTH_ENABLED = False
+        api_server.settings.UI_BASIC_AUTH_USERS = None
+        api_server._ui_users_cache["raw"] = None
 
     def test_ui_status(self):
         resp = self.client.get("/api/ui/status")
@@ -417,6 +433,140 @@ class UiApiTests(unittest.TestCase):
         api_server.settings.UI_BASIC_AUTH_ENABLED = False
         api_server.settings.UI_BASIC_AUTH_USERS = None
         api_server._ui_users_cache["raw"] = None
+
+    def test_admin_summary_and_accounts(self):
+        auth = self._enable_admin_auth()
+        resp = self.client.get("/api/admin/summary", auth=auth)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("accounts", data)
+        self.assertIn("operators", data)
+
+        accounts = self.client.get("/api/admin/accounts", auth=auth)
+        self.assertEqual(accounts.status_code, 200)
+        self.assertIn("accounts", accounts.json())
+        self._disable_admin_auth()
+
+    def test_admin_settings_roundtrip(self):
+        auth = self._enable_admin_auth()
+        patch = self.client.patch(
+            "/api/admin/settings",
+            json={"values": {"MAX_MESSAGES_PER_HOUR": 77}},
+            auth=auth
+        )
+        self.assertEqual(patch.status_code, 200)
+
+        resp = self.client.get("/api/admin/settings", auth=auth)
+        self.assertEqual(resp.status_code, 200)
+        settings_payload = resp.json()
+        item = next(
+            (entry for entry in settings_payload["settings"] if entry["key"] == "MAX_MESSAGES_PER_HOUR"),
+            None
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item["current_value"], 77)
+
+        async def _read_setting():
+            async with SessionLocal() as session:
+                record = await session.get(AppSetting, "MAX_MESSAGES_PER_HOUR")
+                return record.value if record else None
+
+        stored_value = asyncio.run(_read_setting())
+        self.assertEqual(stored_value, 77)
+
+        self.client.patch(
+            "/api/admin/settings",
+            json={"values": {"MAX_MESSAGES_PER_HOUR": None}},
+            auth=auth
+        )
+        self._disable_admin_auth()
+
+    def test_admin_templates_crud(self):
+        auth = self._enable_admin_auth()
+        create = self.client.post(
+            "/api/admin/templates",
+            json={"label": "Test", "body": "Hello", "is_active": True},
+            auth=auth
+        )
+        self.assertEqual(create.status_code, 200)
+        template_id = create.json()["template"]["id"]
+
+        listed = self.client.get("/api/admin/templates", auth=auth).json()["templates"]
+        self.assertTrue(any(item["id"] == template_id for item in listed))
+
+        updated = self.client.patch(
+            f"/api/admin/templates/{template_id}",
+            json={"label": "Updated"},
+            auth=auth
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["template"]["label"], "Updated")
+
+        deleted = self.client.delete(
+            f"/api/admin/templates/{template_id}",
+            auth=auth
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self._disable_admin_auth()
+
+    def test_admin_tags_crud(self):
+        auth = self._enable_admin_auth()
+        create = self.client.post(
+            "/api/admin/tags",
+            json={"name": "vip", "description": "Key client", "color": "#229ED9", "is_active": True},
+            auth=auth
+        )
+        self.assertEqual(create.status_code, 200)
+        tag_id = create.json()["tag"]["id"]
+
+        listed = self.client.get("/api/admin/tags", auth=auth).json()["tags"]
+        self.assertTrue(any(item["id"] == tag_id for item in listed))
+
+        updated = self.client.patch(
+            f"/api/admin/tags/{tag_id}",
+            json={"description": "Important client"},
+            auth=auth
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["tag"]["description"], "Important client")
+
+        deleted = self.client.delete(
+            f"/api/admin/tags/{tag_id}",
+            auth=auth
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self._disable_admin_auth()
+
+    def test_admin_logs_and_audit(self):
+        auth = self._enable_admin_auth()
+        logs = self.client.get("/api/admin/logs", auth=auth)
+        self.assertEqual(logs.status_code, 200)
+        self.assertIn("lines", logs.json())
+
+        self.client.patch(
+            "/api/admin/settings",
+            json={"values": {"MAX_MESSAGES_PER_HOUR": 88}},
+            auth=auth
+        )
+        audit = self.client.get("/api/admin/audit?action=settings_update", auth=auth)
+        self.assertEqual(audit.status_code, 200)
+        entries = audit.json()["audit"]
+        self.assertTrue(any(item["action"] == "settings_update" for item in entries))
+
+        self.client.patch(
+            "/api/admin/settings",
+            json={"values": {"MAX_MESSAGES_PER_HOUR": None}},
+            auth=auth
+        )
+        self._disable_admin_auth()
+
+    def test_app_settings_validation(self):
+        async def _apply_invalid():
+            return await update_settings_overrides({"MAX_MESSAGES_PER_HOUR": "not-a-number"})
+
+        updated, errors = asyncio.run(_apply_invalid())
+        self.assertEqual(updated, {})
+        self.assertIn("MAX_MESSAGES_PER_HOUR", errors)
 
 
 if __name__ == "__main__":
