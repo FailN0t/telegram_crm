@@ -280,6 +280,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Idempotency webhooks — нет дубликатов сообщений
 - [x] Атомарный AntiSpam — нет race condition
 - [x] Auth для /ui — нет публичного доступа
+- [x] Secrets через `*_FILE` — поддержка Docker/K8s secret files
 - [x] Foreign Keys — целостность БД
 - [x] Graceful shutdown — нет потерь при деплое
 

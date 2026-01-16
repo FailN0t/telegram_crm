@@ -3,9 +3,33 @@
 """
 
 import os
+import logging
 from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from dotenv import load_dotenv
+
+
+logger = logging.getLogger(__name__)
+
+
+def _apply_file_secrets() -> None:
+    for key, path in list(os.environ.items()):
+        if not key.endswith("_FILE"):
+            continue
+        if not path:
+            continue
+        target_key = key[:-5]
+        if os.environ.get(target_key):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                value = handle.read().strip()
+        except OSError as exc:
+            raise RuntimeError(f"Cannot read secret file for {target_key}: {path}") from exc
+        if not value:
+            raise RuntimeError(f"Secret file for {target_key} is empty: {path}")
+        os.environ[target_key] = value
 
 
 class Settings(BaseSettings):
@@ -107,4 +131,6 @@ class Settings(BaseSettings):
 
 
 # Глобальный экземпляр настроек
+load_dotenv(".env")
+_apply_file_secrets()
 settings = Settings()

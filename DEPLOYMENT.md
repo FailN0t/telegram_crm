@@ -32,6 +32,12 @@ nano .env
 chmod 600 .env
 ```
 
+Для секретов можно использовать `*_FILE` переменные (Docker/K8s secrets), например:
+```
+API_SECRET_KEY_FILE=/run/secrets/api_secret_key
+AMOCRM_CLIENT_SECRET_FILE=/run/secrets/amocrm_client_secret
+```
+
 Заполните минимум:
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`
 - `API_SECRET_KEY`
