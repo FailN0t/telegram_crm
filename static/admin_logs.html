@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Admin Settings</title>
+    <title>Admin Logs</title>
     <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
@@ -35,12 +35,12 @@
     </script>
     <link rel="stylesheet" href="/static/styles.min.css?v=20260116" />
   </head>
-  <body class="bg-background-light dark:bg-background-dark text-gray-800 dark:text-gray-100 min-h-screen flex flex-col font-body transition-colors duration-200" data-page="settings">
+  <body class="bg-background-light dark:bg-background-dark text-gray-800 dark:text-gray-100 min-h-screen flex flex-col font-body transition-colors duration-200" data-page="logs">
     <header class="h-14 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark flex items-center justify-between px-4 shrink-0 z-20">
       <div class="flex items-center gap-4">
         <div class="flex items-center gap-2">
-          <span class="material-icons-outlined text-primary text-2xl">tune</span>
-          <h1 class="font-bold text-lg tracking-tight">Admin Settings</h1>
+          <span class="material-icons-outlined text-primary text-2xl">receipt_long</span>
+          <h1 class="font-bold text-lg tracking-tight">Admin Logs</h1>
         </div>
         <div class="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-2"></div>
         <nav class="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
@@ -68,36 +68,77 @@
         <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
           <div class="flex items-center justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Runtime settings</h2>
-              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Настройки сохраняются в БД и применяются при старте. Некоторые изменения требуют рестарта worker.
-              </p>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Application logs</h2>
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Последние строки из файла логов.</p>
             </div>
             <div class="flex items-center gap-2">
-              <button class="btn primary" id="btn-refresh">Refresh</button>
-              <span class="result" id="settings-status"></span>
+              <button class="btn primary" id="btn-refresh-logs">Refresh</button>
+              <span class="result" id="logs-status"></span>
             </div>
           </div>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label class="text-xs uppercase text-gray-400">Level</label>
+              <select id="logs-level" class="mt-1 w-full">
+                <option value="">All</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs uppercase text-gray-400">Search</label>
+              <input id="logs-search" class="mt-1 w-full" placeholder="substring" />
+            </div>
+            <div>
+              <label class="text-xs uppercase text-gray-400">Limit</label>
+              <input id="logs-limit" type="number" class="mt-1 w-full" value="200" min="10" max="1000" />
+            </div>
+          </div>
+          <pre class="mt-4 text-xs bg-gray-100 dark:bg-gray-900 border border-border-light dark:border-border-dark rounded-xl p-4 overflow-auto" id="logs-output">Loading...</pre>
         </section>
 
         <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
-          <div class="overflow-x-auto">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Audit log</h2>
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Действия администраторов в системе.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button class="btn primary" id="btn-refresh-audit">Refresh</button>
+              <span class="result" id="audit-status"></span>
+            </div>
+          </div>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label class="text-xs uppercase text-gray-400">Actor</label>
+              <input id="audit-actor" class="mt-1 w-full" placeholder="username" />
+            </div>
+            <div>
+              <label class="text-xs uppercase text-gray-400">Action</label>
+              <input id="audit-action" class="mt-1 w-full" placeholder="settings_update" />
+            </div>
+            <div>
+              <label class="text-xs uppercase text-gray-400">Limit</label>
+              <input id="audit-limit" type="number" class="mt-1 w-full" value="100" min="10" max="200" />
+            </div>
+          </div>
+          <div class="mt-4 overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead class="text-xs uppercase text-gray-500 dark:text-gray-400 border-b border-border-light dark:border-border-dark">
                 <tr>
-                  <th class="text-left py-2 px-3">Key</th>
-                  <th class="text-left py-2 px-3">Description</th>
-                  <th class="text-left py-2 px-3">Default</th>
-                  <th class="text-left py-2 px-3">Current</th>
-                  <th class="text-left py-2 px-3">Value</th>
+                  <th class="text-left py-2 px-3">When</th>
+                  <th class="text-left py-2 px-3">Actor</th>
                   <th class="text-left py-2 px-3">Action</th>
+                  <th class="text-left py-2 px-3">Entity</th>
+                  <th class="text-left py-2 px-3">Data</th>
                 </tr>
               </thead>
-              <tbody id="settings-table-body"></tbody>
+              <tbody id="audit-table-body"></tbody>
             </table>
           </div>
-          <div class="empty-state mt-4" id="settings-empty">
-            Нет настроек для отображения.
+          <div class="empty-state mt-4" id="audit-empty">
+            Нет записей audit log.
           </div>
         </section>
       </div>

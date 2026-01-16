@@ -5,6 +5,7 @@ FastAPI сервер для API endpoints
 
 import asyncio
 import time
+from collections import deque
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
@@ -32,6 +33,7 @@ from src.database import (
     MessageOutbox,
     UiMessageHistory,
     UiEventLog,
+    AuditLog,
     SessionLocal
 )
 from src.app_settings import (
@@ -196,6 +198,28 @@ async def log_ui_event(level: str, message: str, data: Optional[dict] = None) ->
     return entry
 
 
+async def log_audit_event(
+    action: str,
+    ui_user: dict,
+    data: Optional[dict] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None
+) -> None:
+    try:
+        async with SessionLocal() as session:
+            session.add(AuditLog(
+                actor=ui_user.get("username") or "unknown",
+                role=ui_user.get("role") or "unknown",
+                action=action,
+                entity_type=entity_type,
+                entity_id=str(entity_id) if entity_id is not None else None,
+                data=data or {}
+            ))
+            await session.commit()
+    except Exception as exc:
+        logger.warning(f"⚠️ Не удалось сохранить audit log: {exc}")
+
+
 def get_ui_users() -> dict:
     raw = settings.UI_BASIC_AUTH_USERS or ""
     if raw == _ui_users_cache["raw"]:
@@ -322,6 +346,16 @@ def ui_error_response(
             "retryable": retryable
         }
     )
+
+
+def tail_log_lines(log_path: Path, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    lines = deque(maxlen=limit)
+    with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            lines.append(line.rstrip("\n"))
+    return list(lines)
 
 
 def humanize_auth_status(status: str) -> str:
@@ -499,6 +533,18 @@ def create_app() -> FastAPI:
     async def admin_settings_page(ui_user: dict = Depends(require_admin)):
         """Admin settings page"""
         page_path = STATIC_DIR / "admin_settings.html"
+        if not page_path.exists():
+            raise HTTPException(status_code=404, detail="UI not found")
+        return FileResponse(
+            page_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/admin/logs", tags=["Admin"])
+    async def admin_logs_page(ui_user: dict = Depends(require_admin)):
+        """Admin logs page"""
+        page_path = STATIC_DIR / "admin_logs.html"
         if not page_path.exists():
             raise HTTPException(status_code=404, detail="UI not found")
         return FileResponse(
@@ -982,6 +1028,14 @@ def create_app() -> FastAPI:
         await db.commit()
         await db.refresh(account)
 
+        await log_audit_event(
+            "account_update",
+            ui_user,
+            data={"label": account.label, "is_active": account.is_active},
+            entity_type="telegram_account",
+            entity_id=str(account.id)
+        )
+
         if bridge and bridge.telegram:
             await bridge.telegram.refresh_accounts(active_only=False)
             if request.is_active is False:
@@ -1050,6 +1104,12 @@ def create_app() -> FastAPI:
                 settings.MIN_DELAY_BETWEEN_MESSAGES
             )
 
+        await log_audit_event(
+            "settings_update",
+            ui_user,
+            data={"updated": updated, "errors": errors}
+        )
+
         restart_keys = [
             key for key in updated.keys()
             if ALLOWED_SETTINGS.get(key, {}).get("requires_restart")
@@ -1060,6 +1120,64 @@ def create_app() -> FastAPI:
             "requires_restart": bool(restart_keys),
             "restart_keys": restart_keys,
         }
+
+    @app.get("/api/admin/logs", tags=["Admin"])
+    async def admin_logs(
+        limit: int = 200,
+        level: Optional[str] = None,
+        search: Optional[str] = None,
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Tail application logs."""
+        log_path = Path(settings.LOG_FILE)
+        if not log_path.exists():
+            return {"lines": [], "message": "log_file_not_found"}
+
+        safe_limit = max(1, min(limit, 1000))
+        lines = tail_log_lines(log_path, safe_limit)
+
+        if level:
+            level_token = level.strip().upper()
+            lines = [line for line in lines if level_token in line]
+
+        if search:
+            token = search.strip()
+            if token:
+                lines = [line for line in lines if token in line]
+
+        return {"lines": lines}
+
+    @app.get("/api/admin/audit", tags=["Admin"])
+    async def admin_audit(
+        limit: int = 100,
+        actor: Optional[str] = None,
+        action: Optional[str] = None,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Audit log entries."""
+        safe_limit = max(1, min(limit, 200))
+        stmt = select(AuditLog)
+        if actor:
+            stmt = stmt.filter(AuditLog.actor == actor)
+        if action:
+            stmt = stmt.filter(AuditLog.action == action)
+        stmt = stmt.order_by(AuditLog.created_at.desc()).limit(safe_limit)
+        result = await db.execute(stmt)
+        rows = result.scalars().all()
+        items = []
+        for row in rows:
+            items.append({
+                "id": row.id,
+                "actor": row.actor,
+                "role": row.role,
+                "action": row.action,
+                "entity_type": row.entity_type,
+                "entity_id": row.entity_id,
+                "data": row.data or {},
+                "created_at": row.created_at.isoformat() + "Z" if row.created_at else None
+            })
+        return {"audit": items}
 
     @app.get("/api/ui/operators", tags=["UI"])
     async def ui_operators(
@@ -1146,6 +1264,19 @@ def create_app() -> FastAPI:
 
         await db.commit()
         await db.refresh(operator)
+
+        await log_audit_event(
+            "operator_update",
+            ui_user,
+            data={
+                "display_name": operator.display_name,
+                "email": operator.email,
+                "hourly_limit": operator.hourly_limit,
+                "daily_limit": operator.daily_limit,
+            },
+            entity_type="operator",
+            entity_id=str(operator.id)
+        )
 
         return {
             "success": True,

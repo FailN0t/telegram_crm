@@ -192,6 +192,22 @@ SSE‑поток событий.
 }
 ```
 
+### `GET /api/admin/logs`
+Tail логов приложения.
+
+**Query**
+- `limit` — максимум строк (1–1000)
+- `level` — фильтр по уровню (INFO/WARNING/ERROR)
+- `search` — подстрока
+
+### `GET /api/admin/audit`
+Audit log admin‑действий.
+
+**Query**
+- `limit` — максимум записей (1–200)
+- `actor` — фильтр по пользователю
+- `action` — фильтр по действию
+
 ### `GET /api/ui/chats`
 Список чатов (для UI).
 

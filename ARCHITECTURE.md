@@ -94,6 +94,7 @@ UI получает событие через SSE /api/ui/stream
 - `ui_event_log` — журнал событий UI.
 - `operators` — лимиты и метаданные операторов (hourly/daily).
 - `app_settings` — admin‑overrides настроек (anti‑spam/outbox).
+- `audit_log` — журнал действий администраторов.
 
 Account binding:
 - `account_id` добавлен в `chat_mappings`, `chat_profiles`, `message_outbox`, `message_history`, `ui_message_history`, `ui_chats`.

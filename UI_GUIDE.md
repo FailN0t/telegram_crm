@@ -76,6 +76,7 @@ UI состоит из двух страниц:
 - `/admin` — сводка по аккаунтам, операторам, outbox.
 - `/admin/accounts` — управление label/active для Telegram аккаунтов.
 - `/admin/settings` — изменение глобальных лимитов (anti‑spam/outbox).
+- `/admin/logs` — просмотр логов приложения и audit log.
 
 ### Примечания
 - Для доступа нужен Basic Auth с ролью `admin`.

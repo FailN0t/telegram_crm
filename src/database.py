@@ -380,6 +380,30 @@ class UiEventLog(Base):
     )
 
 
+class AuditLog(Base):
+    """Audit log for admin actions"""
+
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor = Column(String(100), nullable=False, index=True)
+    role = Column(String(50), nullable=False, index=True)
+    action = Column(String(100), nullable=False, index=True)
+    entity_type = Column(String(100), index=True)
+    entity_id = Column(String(100), index=True)
+    data = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('idx_audit_log_actor', 'actor'),
+        Index('idx_audit_log_role', 'role'),
+        Index('idx_audit_log_action', 'action'),
+        Index('idx_audit_log_entity_type', 'entity_type'),
+        Index('idx_audit_log_entity_id', 'entity_id'),
+        Index('idx_audit_log_created_at', 'created_at'),
+    )
+
+
 class UiChat(Base):
     """Состояние чатов для UI"""
 

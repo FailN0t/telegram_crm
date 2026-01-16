@@ -338,6 +338,82 @@ function buildSettingRow(setting, onSave, onReset) {
   return row;
 }
 
+async function loadLogs() {
+  const statusEl = document.getElementById("logs-status");
+  const levelInput = document.getElementById("logs-level");
+  const searchInput = document.getElementById("logs-search");
+  const limitInput = document.getElementById("logs-limit");
+  const outputEl = document.getElementById("logs-output");
+
+  setStatus(statusEl, null, "Loading...");
+  try {
+    const params = new URLSearchParams();
+    if (levelInput && levelInput.value) {
+      params.set("level", levelInput.value);
+    }
+    if (searchInput && searchInput.value.trim()) {
+      params.set("search", searchInput.value.trim());
+    }
+    const limitValue = limitInput ? Number(limitInput.value) : 200;
+    if (Number.isFinite(limitValue)) {
+      params.set("limit", String(Math.min(Math.max(limitValue, 10), 1000)));
+    }
+    const url = `/api/admin/logs?${params.toString()}`;
+    const data = await fetchJson(url);
+    const lines = data.lines || [];
+    outputEl.textContent = lines.join("\n") || "No log lines.";
+    setStatus(statusEl, true, "Updated");
+  } catch (err) {
+    outputEl.textContent = "Failed to load logs.";
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
+async function loadAudit() {
+  const statusEl = document.getElementById("audit-status");
+  const actorInput = document.getElementById("audit-actor");
+  const actionInput = document.getElementById("audit-action");
+  const limitInput = document.getElementById("audit-limit");
+  const tableBody = document.getElementById("audit-table-body");
+  const emptyState = document.getElementById("audit-empty");
+
+  setStatus(statusEl, null, "Loading...");
+  try {
+    const params = new URLSearchParams();
+    const actorValue = actorInput ? actorInput.value.trim() : "";
+    const actionValue = actionInput ? actionInput.value.trim() : "";
+    if (actorValue) params.set("actor", actorValue);
+    if (actionValue) params.set("action", actionValue);
+    const limitValue = limitInput ? Number(limitInput.value) : 100;
+    if (Number.isFinite(limitValue)) {
+      params.set("limit", String(Math.min(Math.max(limitValue, 10), 200)));
+    }
+    const data = await fetchJson(`/api/admin/audit?${params.toString()}`);
+    const items = data.audit || [];
+    tableBody.innerHTML = "";
+    if (items.length === 0) {
+      emptyState.style.display = "block";
+    } else {
+      emptyState.style.display = "none";
+      items.forEach(item => {
+        const row = document.createElement("tr");
+        row.className = "border-b border-border-light dark:border-border-dark";
+        row.innerHTML = `
+          <td class="py-2 px-3 text-xs">${escapeHtml(item.created_at || "--")}</td>
+          <td class="py-2 px-3 text-xs">${escapeHtml(item.actor || "--")} (${escapeHtml(item.role || "--")})</td>
+          <td class="py-2 px-3 text-xs">${escapeHtml(item.action || "--")}</td>
+          <td class="py-2 px-3 text-xs">${escapeHtml(item.entity_type || "--")} ${escapeHtml(item.entity_id || "")}</td>
+          <td class="py-2 px-3 text-[11px] text-gray-500 dark:text-gray-400">${escapeHtml(JSON.stringify(item.data || {}))}</td>
+        `;
+        tableBody.appendChild(row);
+      });
+    }
+    setStatus(statusEl, true, "Updated");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
 async function loadSettings() {
   const statusEl = document.getElementById("settings-status");
   const tableBody = document.getElementById("settings-table-body");
@@ -392,6 +468,10 @@ if (refreshButton) {
     if (page === "dashboard") loadSummary();
     if (page === "accounts") loadAccounts();
     if (page === "settings") loadSettings();
+    if (page === "logs") {
+      loadLogs();
+      loadAudit();
+    }
   });
 }
 
@@ -403,4 +483,12 @@ if (page === "accounts") {
 }
 if (page === "settings") {
   loadSettings();
+}
+if (page === "logs") {
+  const refreshLogs = document.getElementById("btn-refresh-logs");
+  const refreshAudit = document.getElementById("btn-refresh-audit");
+  if (refreshLogs) refreshLogs.addEventListener("click", loadLogs);
+  if (refreshAudit) refreshAudit.addEventListener("click", loadAudit);
+  loadLogs();
+  loadAudit();
 }
