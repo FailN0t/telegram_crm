@@ -100,7 +100,11 @@ worker:
 - Если 2FA — введите пароль
 
 ## 7) Защита UI
-UI не защищён по умолчанию. Рекомендуется Basic Auth в Nginx.
+UI можно защитить двумя способами:
+1) Встроенный Basic Auth:
+   - `UI_BASIC_AUTH_ENABLED=true`
+   - `UI_BASIC_AUTH_USERS=admin:pass:admin,operator:pass:operator`
+2) Basic Auth в Nginx (дополнительный периметр).
 
 ```bash
 sudo apt install apache2-utils -y
@@ -110,6 +114,12 @@ sudo htpasswd -c /etc/nginx/.htpasswd admin
 В `nginx.conf` добавьте:
 ```nginx
 location /ui {
+  auth_basic "Restricted";
+  auth_basic_user_file /etc/nginx/.htpasswd;
+  proxy_pass http://app:8000;
+}
+
+location /admin {
   auth_basic "Restricted";
   auth_basic_user_file /etc/nginx/.htpasswd;
   proxy_pass http://app:8000;

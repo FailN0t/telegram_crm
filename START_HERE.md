@@ -41,4 +41,5 @@ curl http://localhost:8000/health
 
 - MTProto = личный аккаунт. Соблюдайте ToS Telegram и лимиты.
 - Работайте только с согласиями клиентов.
-- `/ui` не защищен логином: на продакшене закройте доступ через reverse proxy.
+- Для UI используйте встроенный Basic Auth (`UI_BASIC_AUTH_ENABLED`, `UI_BASIC_AUTH_USERS`) или защиту через reverse proxy.
+- `/admin` доступен только пользователям с ролью `admin` из `UI_BASIC_AUTH_USERS`.

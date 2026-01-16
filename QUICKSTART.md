@@ -88,6 +88,8 @@ python3 -m src.outbox_worker
 Откройте в браузере:
 - Авторизация: `http://localhost:8000/ui/auth`
 - Консоль: `http://localhost:8000/ui`
+- Операторы: `http://localhost:8000/ui/operators`
+- Admin UI: `http://localhost:8000/admin` (нужна роль `admin`)
 
 > Порт зависит от `API_PORT` в `.env`.
 
@@ -96,6 +98,12 @@ python3 -m src.outbox_worker
 2. Введите код из Telegram → **Submit code**.
 3. Если включен 2FA — введите пароль → **Submit 2FA**.
 4. После авторизации перейдите в `/ui`.
+
+Если нужен доступ к `/admin`, включите Basic Auth:
+```bash
+UI_BASIC_AUTH_ENABLED=true
+UI_BASIC_AUTH_USERS=admin:pass:admin,operator:pass:operator
+```
 
 ## 9) Отправка первого сообщения (UI)
 1. В правой панели **New Chat** введите `@username` или телефон.

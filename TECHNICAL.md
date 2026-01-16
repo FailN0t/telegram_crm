@@ -76,6 +76,7 @@
 2. Нажмите **Send code**, введите код из Telegram.
 3. Если включен 2FA — введите пароль.
 4. В консоли `http://localhost:8000/ui` проверьте статус.
+5. Admin UI доступен на `http://localhost:8000/admin` (нужна роль `admin`).
 
 ### Ошибки БД (PostgreSQL)
 1. Убедитесь, что Postgres запущен.
@@ -97,7 +98,8 @@
 
 ## 4) UI assets
 
-- Исходники: `static/ui.html`, `static/auth.html`, `static/styles.css`, `static/app.js`, `static/auth.js`.
+- Исходники: `static/ui.html`, `static/auth.html`, `static/operators.html`, `static/admin*.html`, `static/styles.css`,
+  `static/app.js`, `static/auth.js`, `static/operators.js`, `static/admin.js`.
 - Минификация: `python3 scripts/minify_assets.py` (обновляет `*.min.css/js`).
 
 ### Ошибки Redis
