@@ -1,11 +1,21 @@
 # Тестирование
 
 ## Запуск тестов
-Все тесты — `unittest` и используют SQLite файлы в корне проекта.
+Все тесты — `unittest`. По умолчанию используют SQLite файлы в корне проекта.
+При необходимости можно прогонять на PostgreSQL (см. ниже).
 
 ### Запуск всех тестов
 ```bash
 python3 -m unittest
+```
+
+### Запуск тестов на PostgreSQL (опционально)
+Используйте отдельную тестовую БД и включите `create_all`:
+```bash
+DATABASE_URL=postgresql://postgres:pass@localhost:5432/telegram_bot_test \
+DB_ALLOW_CREATE_ALL=true \
+DB_USE_NULL_POOL=true \
+python3 -m unittest discover -s tests
 ```
 
 ### Запуск отдельных тестов

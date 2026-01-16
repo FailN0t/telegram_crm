@@ -49,6 +49,7 @@
 | --- | --- | --- | --- |
 | `DATABASE_URL` | да | Postgres URL | `postgresql://postgres:pass@localhost:5432/telegram_bot` |
 | `DB_ALLOW_CREATE_ALL` | нет | Разрешить `create_all` (dev) | `false` |
+| `DB_USE_NULL_POOL` | нет | Отключить пул соединений (NullPool) | `true` |
 
 ## Redis
 | Переменная | Обязательная | Описание | Пример |

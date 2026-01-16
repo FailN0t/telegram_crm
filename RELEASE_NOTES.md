@@ -4,9 +4,11 @@
 
 ### Added
 - Подробная документация: `CONFIGURATION.md`, `ARCHITECTURE.md`, `API.md`, `UI_GUIDE.md`, `TESTING.md`.
+- `DB_USE_NULL_POOL` для отключения пула соединений (полезно для тестов/CLI).
 
 ### Changed
 - README и QUICKSTART обновлены и синхронизированы с текущей архитектурой.
+- `TESTING.md` дополнен инструкцией по запуску тестов на PostgreSQL.
 
 ### Fixed
 - —
