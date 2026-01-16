@@ -281,6 +281,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Атомарный AntiSpam — нет race condition
 - [x] Auth для /ui — нет публичного доступа
 - [x] Secrets через `*_FILE` — поддержка Docker/K8s secret files
+- [x] Data retention — политика хранения + очистка audit log
 - [x] Foreign Keys — целостность БД
 - [x] Graceful shutdown — нет потерь при деплое
 

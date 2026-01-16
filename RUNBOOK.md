@@ -83,7 +83,15 @@ pg_restore -d telegram_bot backups/db.dump
 python3 -m alembic upgrade head
 ```
 
-## 6) После восстановления
+## 6) Data retention
+Очистка старых записей (ui_message_history, ui_event_log, audit_log, message_inbox):
+```bash
+python3 -m src.retention
+```
+
+Для регулярного запуска используйте cron (например, ежедневно ночью).
+
+## 7) После восстановления
 1. Перезапустите сервис: `docker-compose -f docker-compose.production.yml restart app`.
 2. Проверьте `/health` и `/startup`.
 3. Авторизуйте MTProto при необходимости.

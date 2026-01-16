@@ -47,6 +47,7 @@ from src.app_settings import (
 )
 from src.bridge import AmoCRMTelegramBridge
 from src.amocrm_client import AmoCRMClient
+from src.retention import run_retention
 from src.outbox import (
     build_idempotency_key,
     enqueue_outbox,
@@ -1542,6 +1543,17 @@ def create_app() -> FastAPI:
         )
 
         return {"success": True}
+
+    @app.post("/api/admin/retention/run", tags=["Admin"])
+    async def admin_retention_run(ui_user: dict = Depends(require_admin)):
+        """Запуск очистки по политике retention."""
+        result = await run_retention()
+        await log_audit_event(
+            "retention_run",
+            ui_user,
+            data=result
+        )
+        return {"success": True, "result": result}
 
     @app.get("/api/admin/logs", tags=["Admin"])
     async def admin_logs(

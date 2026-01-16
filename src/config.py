@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     OUTBOX_MAX_ATTEMPTS: int = Field(default=5, env="OUTBOX_MAX_ATTEMPTS")
     OUTBOX_RETRY_BASE_SECONDS: int = Field(default=10, env="OUTBOX_RETRY_BASE_SECONDS")
     OUTBOX_POLL_INTERVAL: int = Field(default=2, env="OUTBOX_POLL_INTERVAL")
+
+    # Data retention (days, 0 = disable)
+    UI_MESSAGE_RETENTION_DAYS: int = Field(default=365, env="UI_MESSAGE_RETENTION_DAYS")
+    UI_EVENT_RETENTION_DAYS: int = Field(default=90, env="UI_EVENT_RETENTION_DAYS")
+    AUDIT_LOG_RETENTION_DAYS: int = Field(default=365, env="AUDIT_LOG_RETENTION_DAYS")
+    MESSAGE_INBOX_RETENTION_DAYS: int = Field(default=30, env="MESSAGE_INBOX_RETENTION_DAYS")
     
     # Logging
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")

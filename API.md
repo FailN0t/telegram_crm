@@ -244,6 +244,9 @@ OAuth callback, обменивает `code` на токены и перенап�
 ### `DELETE /api/admin/tags/{tag_id}`
 Удаление тега.
 
+### `POST /api/admin/retention/run`
+Запуск очистки по retention-политике (удаление старых записей).
+
 ### `GET /api/admin/logs`
 Tail логов приложения.
 

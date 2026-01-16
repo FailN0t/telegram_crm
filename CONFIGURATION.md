@@ -123,6 +123,14 @@ Per-operator лимиты хранятся в таблице `operators` и пр
 
 Если `OUTBOX_PROCESS_INLINE=false`, нужно запускать `python3 -m src.outbox_worker`.
 
+## Data retention
+| Переменная | Обязательная | Описание | Пример |
+| --- | --- | --- | --- |
+| `UI_MESSAGE_RETENTION_DAYS` | нет | Хранение ui_message_history (дни, 0 = отключить) | `365` |
+| `UI_EVENT_RETENTION_DAYS` | нет | Хранение ui_event_log (дни, 0 = отключить) | `90` |
+| `AUDIT_LOG_RETENTION_DAYS` | нет | Хранение audit_log (дни, 0 = отключить) | `365` |
+| `MESSAGE_INBOX_RETENTION_DAYS` | нет | Хранение message_inbox (дни, 0 = отключить) | `30` |
+
 ## Logging
 | Переменная | Обязательная | Описание | Пример |
 | --- | --- | --- | --- |
