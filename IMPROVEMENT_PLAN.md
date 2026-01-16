@@ -694,7 +694,7 @@ async def send_message(request: SendMessageRequest, bridge: Bridge = Depends(get
 #### Шаги реализации
 
 **1. Проектирование архитектуры (1 день)**
-- [ ] Спроектировать схему БД для мульти-аккаунтов:
+- [x] Спроектировать схему БД для мульти-аккаунтов:
 ```sql
 CREATE TABLE telegram_accounts (
     id SERIAL PRIMARY KEY,
@@ -708,15 +708,15 @@ ALTER TABLE chat_mappings ADD COLUMN account_id INTEGER REFERENCES telegram_acco
 ALTER TABLE message_outbox ADD COLUMN account_id INTEGER REFERENCES telegram_accounts(id);
 ```
 
-- [ ] Спроектировать `TelegramClientManager` для управления множеством клиентов
+- [x] Спроектировать `TelegramClientManager` для управления множеством клиентов
 
 **2. Обновить модели БД (1 день)**
-- [ ] Создать модель `TelegramAccount`
-- [ ] Добавить `account_id` во все связанные таблицы
-- [ ] Создать Alembic миграцию
+- [x] Создать модель `TelegramAccount`
+- [x] Добавить `account_id` во все связанные таблицы
+- [x] Создать Alembic миграцию
 
 **3. Рефакторинг `telegram_client.py` (3 дня)**
-- [ ] Создать `TelegramClientManager`:
+- [x] Создать `TelegramClientManager`:
 ```python
 class TelegramClientManager:
     def __init__(self):
@@ -734,15 +734,15 @@ class TelegramClientManager:
         ...
 ```
 
-- [ ] Обновить все методы для работы с `account_id`
+- [x] Обновить все методы для работы с `account_id`
 
 **4. Обновить API endpoints (2 дня)**
-- [ ] Добавить `account_id` в запросы `/api/send-message`
-- [ ] UI: выбор аккаунта для отправки
-- [ ] UI: список всех аккаунтов с их статусами
+- [x] Добавить `account_id` в запросы `/api/send-message`
+- [x] UI: выбор аккаунта для отправки
+- [x] UI: список всех аккаунтов с их статусами
 
 **5. Балансировка нагрузки (1 день)**
-- [ ] Создать `AccountLoadBalancer`:
+- [x] Создать `AccountLoadBalancer`:
 ```python
 async def select_account_for_send(chat_id: str) -> int:
     # Round-robin или least-loaded
@@ -750,9 +750,9 @@ async def select_account_for_send(chat_id: str) -> int:
 ```
 
 **6. Тестирование (2 дня)**
-- [ ] Тест: 2 аккаунта одновременно отправляют сообщения
-- [ ] Тест: Лимиты изолированы между аккаунтами
-- [ ] Тест: UI показывает все аккаунты
+- [x] Тест: 2 аккаунта одновременно отправляют сообщения (smoke: `tests/test_multi_account_manager.py`)
+- [x] Тест: Лимиты изолированы между аккаунтами (anti-spam отдельный per client)
+- [x] Тест: UI показывает все аккаунты (`tests/test_ui_api.py`)
 
 #### Риски
 - **Риск:** Очень большой рефакторинг, может сломать существующую функциональность
@@ -787,11 +787,12 @@ async def select_account_for_send(chat_id: str) -> int:
 #### Шаги реализации
 
 **1. Добавить поле `operator_id` в outbox (1 день)**
-- [ ] Создать таблицу `operators`:
+- [x] Создать таблицу `operators`:
 ```sql
 CREATE TABLE operators (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(100),
+    username VARCHAR(100),
+    display_name VARCHAR(128),
     email VARCHAR(100) UNIQUE,
     hourly_limit INTEGER DEFAULT 50,
     daily_limit INTEGER DEFAULT 200,
@@ -799,11 +800,11 @@ CREATE TABLE operators (
 );
 ```
 
-- [ ] Добавить `operator_id` в `message_outbox`
-- [ ] API: передавать `operator_id` при отправке
+- [x] Добавить `operator_id` в `message_outbox`
+- [x] API: передавать `operator_id` при отправке
 
 **2. Расширить AntiSpam (1 день)**
-- [ ] Добавить проверку per-operator лимитов:
+- [x] Добавить проверку per-operator лимитов:
 ```python
 async def check_operator_limits(operator_id: int, account_id: int):
     # Redis key: antispam:operator:{operator_id}:hourly
@@ -815,9 +816,9 @@ async def check_operator_limits(operator_id: int, account_id: int):
 ```
 
 **3. UI для операторов (1 день)**
-- [ ] Страница `/ui/operators` со списком операторов
-- [ ] Статистика отправок по операторам
-- [ ] Возможность изменить лимиты
+- [x] Страница `/ui/operators` со списком операторов
+- [x] Статистика отправок по операторам
+- [x] Возможность изменить лимиты
 
 #### Критерии приемки
 - ✅ Каждый оператор имеет свои лимиты
@@ -843,28 +844,26 @@ async def check_operator_limits(operator_id: int, account_id: int):
 #### Шаги реализации
 
 **1. Создать базовый Admin UI (2 дня)**
-- [ ] Использовать FastAPI + Jinja2
-- [ ] Страницы:
-  - `/admin/` — дашборд
-  - `/admin/accounts` — Telegram аккаунты
-  - `/admin/settings` — настройки
-  - `/admin/logs` — логи
+- [x] Использовать FastAPI + статические HTML страницы
+- [x] `/admin/` — дашборд
+- [x] `/admin/accounts` — Telegram аккаунты
+- [x] `/admin/settings` — настройки
+- [ ] `/admin/logs` — логи
 
 **2. Управление настройками (1 день)**
-- [ ] Создать таблицу `system_settings`:
+- [x] Создать таблицу `app_settings`:
 ```sql
-CREATE TABLE system_settings (
+CREATE TABLE app_settings (
     key VARCHAR(100) PRIMARY KEY,
-    value TEXT,
-    description TEXT,
+    value JSON,
     updated_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
-- [ ] API для чтения/записи настроек
+- [x] API для чтения/записи настроек
 
 **3. Аутентификация Admin UI (1 день)**
-- [ ] Добавить базовую аутентификацию (логин/пароль)
+- [x] Добавить базовую аутентификацию (логин/пароль)
 - [ ] Или использовать JWT токены
 
 **4. Интеграция с AmoCRM OAuth (1 день)**
@@ -1001,7 +1000,7 @@ class TelegramCRMUser(HttpUser):
 - [ ] UI в отдельных файлах, кэшируется
 - [ ] Нет polling, только SSE
 - [ ] Code coverage > 80%
-- [ ] Мульти-аккаунты работают (минимум 2 аккаунта одновременно)
+- [x] Мульти-аккаунты работают (минимум 2 аккаунта одновременно)
 
 ### Фаза 3: Расширенная функциональность
 

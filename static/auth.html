@@ -86,7 +86,11 @@
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Sign in</h2>
             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Use this page to sign in and create a local session file.</p>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+              <div>
+                <label class="text-xs uppercase text-gray-400">Account</label>
+                <select id="auth-account" class="mt-1 w-full"></select>
+              </div>
               <div>
                 <label class="text-xs uppercase text-gray-400">Phone (optional)</label>
                 <input id="auth-phone" class="mt-1 w-full" placeholder="+79991234567" />

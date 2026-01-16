@@ -81,6 +81,7 @@ UI получает событие через SSE /api/ui/stream
 ```
 
 ## Хранилище данных (основные таблицы)
+- `telegram_accounts` — список MTProto аккаунтов (phone, session_string, статус).
 - `chat_mappings` — связь Telegram chat_id ↔ AmoCRM contact_id.
 - `chat_profiles` — теги/заметки/consent/quiet hours.
 - `message_outbox` — очередь исходящих (idempotency).
@@ -91,6 +92,15 @@ UI получает событие через SSE /api/ui/stream
 - `ui_message_history` — история для UI (inbound/outbound + статусы).
 - `ui_chats` — агрегированное состояние чатов (last_message, unread).
 - `ui_event_log` — журнал событий UI.
+- `operators` — лимиты и метаданные операторов (hourly/daily).
+- `app_settings` — admin‑overrides настроек (anti‑spam/outbox).
+
+Account binding:
+- `account_id` добавлен в `chat_mappings`, `chat_profiles`, `message_outbox`, `message_history`, `ui_message_history`, `ui_chats`.
+
+Operator binding:
+- `operator_id` добавлен в `message_outbox` и передается из UI (Basic Auth username).
+- AntiSpam применяет per-operator лимиты поверх глобальных.
 
 ## Idempotency
 - Для `/api/send-message` используется заголовок `Idempotency-Key` (если нет — генерируется из payload).

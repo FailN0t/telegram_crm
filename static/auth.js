@@ -1,22 +1,56 @@
-const statusConnection = document.getElementById("status-connection");
+      const statusConnection = document.getElementById("status-connection");
       const statusAuth = document.getElementById("status-auth");
       const statusUser = document.getElementById("status-user");
       const authResult = document.getElementById("auth-result");
+      const accountSelect = document.getElementById("auth-account");
 
       const themeButton = document.getElementById("btn-theme");
+      let accounts = [];
 
       function setResult(ok, text) {
         authResult.className = "result " + (ok ? "ok" : "err");
         authResult.textContent = text;
       }
 
+      function getSelectedAccountId() {
+        if (!accountSelect) return null;
+        const value = accountSelect.value;
+        return value ? Number(value) : null;
+      }
+
+      function renderAccounts(defaultId) {
+        if (!accountSelect) return;
+        accountSelect.innerHTML = "";
+        accounts.forEach(account => {
+          const option = document.createElement("option");
+          option.value = String(account.account_id);
+          option.textContent = account.label || account.phone_number || ("Account " + account.account_id);
+          accountSelect.appendChild(option);
+        });
+        const selected = getSelectedAccountId();
+        const fallback = selected || defaultId || (accounts[0] && accounts[0].account_id);
+        if (fallback) {
+          accountSelect.value = String(fallback);
+        }
+      }
+
       async function refreshStatus() {
         try {
-          const res = await fetch("/api/ui/status");
+          const res = await fetch("/api/ui/accounts");
           const data = await res.json();
-          statusConnection.textContent = "Connection: " + (data.connected ? "on" : "off");
-          statusAuth.textContent = "Auth: " + (data.authorized ? "yes" : "no");
-          statusUser.textContent = "User: " + (data.user ? data.user.username || data.user.id : "--");
+          accounts = data.accounts || [];
+          renderAccounts(data.default_account_id);
+          const selectedId = getSelectedAccountId() || data.default_account_id;
+          const active = accounts.find(item => item.account_id === selectedId) || accounts[0];
+          if (active) {
+            statusConnection.textContent = "Connection: " + (active.connected ? "on" : "off");
+            statusAuth.textContent = "Auth: " + (active.authorized ? "yes" : "no");
+            statusUser.textContent = "User: " + (active.user ? active.user.username || active.user.id : "--");
+          } else {
+            statusConnection.textContent = "Connection: --";
+            statusAuth.textContent = "Auth: --";
+            statusUser.textContent = "User: --";
+          }
         } catch (err) {
           statusConnection.textContent = "Connection: error";
           statusAuth.textContent = "Auth: error";
@@ -54,10 +88,11 @@ const statusConnection = document.getElementById("status-connection");
 
       async function requestCode() {
         const phone = document.getElementById("auth-phone").value.trim();
+        const accountId = getSelectedAccountId();
         const res = await fetch("/api/ui/auth/request-code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone || null })
+          body: JSON.stringify({ phone: phone || null, account_id: accountId })
         });
         const data = await res.json();
         setResult(data.success, data.message || data.status);
@@ -66,10 +101,11 @@ const statusConnection = document.getElementById("status-connection");
       async function submitCode() {
         const phone = document.getElementById("auth-phone").value.trim();
         const code = document.getElementById("auth-code").value.trim();
+        const accountId = getSelectedAccountId();
         const res = await fetch("/api/ui/auth/submit-code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone || null, code: code })
+          body: JSON.stringify({ phone: phone || null, code: code, account_id: accountId })
         });
         const data = await res.json();
         setResult(data.success, data.message || data.status);
@@ -78,10 +114,11 @@ const statusConnection = document.getElementById("status-connection");
 
       async function submitPassword() {
         const password = document.getElementById("auth-password").value.trim();
+        const accountId = getSelectedAccountId();
         const res = await fetch("/api/ui/auth/submit-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: password })
+          body: JSON.stringify({ password: password, account_id: accountId })
         });
         const data = await res.json();
         setResult(data.success, data.message || data.status);
@@ -89,7 +126,9 @@ const statusConnection = document.getElementById("status-connection");
       }
 
       async function logout() {
-        const res = await fetch("/api/ui/auth/logout", { method: "POST" });
+        const accountId = getSelectedAccountId();
+        const url = accountId ? `/api/ui/auth/logout?account_id=${accountId}` : "/api/ui/auth/logout";
+        const res = await fetch(url, { method: "POST" });
         const data = await res.json();
         setResult(data.success, data.message || data.status);
         refreshStatus();
@@ -100,6 +139,9 @@ const statusConnection = document.getElementById("status-connection");
       document.getElementById("btn-submit-password").addEventListener("click", submitPassword);
       document.getElementById("btn-refresh-status").addEventListener("click", refreshStatus);
       document.getElementById("btn-logout").addEventListener("click", logout);
+      if (accountSelect) {
+        accountSelect.addEventListener("change", refreshStatus);
+      }
 
       function scheduleAuthStatus() {
         setTimeout(async () => {

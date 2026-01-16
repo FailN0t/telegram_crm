@@ -35,6 +35,7 @@ class OutboxModelTests(unittest.TestCase):
             async with SessionLocal() as session:
                 outbox = MessageOutbox(
                     idempotency_key="key-1",
+                    account_id=1,
                     chat_id=123,
                     payload={"text": "hello"},
                     status="queued"
@@ -77,6 +78,7 @@ class OutboxModelTests(unittest.TestCase):
 
                 processing = MessageOutbox(
                     idempotency_key="processing-1",
+                    account_id=1,
                     chat_id=10,
                     payload={"text": "processing"},
                     status="processing",
@@ -84,6 +86,7 @@ class OutboxModelTests(unittest.TestCase):
                 )
                 queued_blocked = MessageOutbox(
                     idempotency_key="queued-1",
+                    account_id=1,
                     chat_id=10,
                     payload={"text": "queued"},
                     status="queued",
@@ -91,6 +94,7 @@ class OutboxModelTests(unittest.TestCase):
                 )
                 queued_allowed = MessageOutbox(
                     idempotency_key="queued-2",
+                    account_id=1,
                     chat_id=20,
                     payload={"text": "queued"},
                     status="queued",
@@ -114,6 +118,7 @@ class OutboxModelTests(unittest.TestCase):
 
                 outbox = MessageOutbox(
                     idempotency_key="dead-1",
+                    account_id=1,
                     chat_id=30,
                     payload={"text": "fail"},
                     status="queued",

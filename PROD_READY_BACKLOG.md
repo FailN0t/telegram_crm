@@ -292,9 +292,10 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 
 ### Улучшения (NICE TO HAVE)
 - [x] HTML вынесен из Python
-- [ ] Мульти-аккаунты MTProto
+- [x] Мульти-аккаунты MTProto
 - [x] Timezone в quiet-hours
-- [ ] Лимиты per operator
+- [x] Лимиты per operator
+- [x] Admin UI (/admin, /admin/accounts, /admin/settings)
 
 ---
 

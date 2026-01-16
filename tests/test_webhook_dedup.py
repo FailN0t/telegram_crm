@@ -23,6 +23,12 @@ from src.database import init_db, SessionLocal, MessageInbox, MessageOutbox
 class DummyBridge:
     def __init__(self):
         self.amocrm = None
+        self.telegram = DummyManager()
+
+
+class DummyManager:
+    async def get_default_account_id(self):
+        return 1
 
 
 class WebhookDedupTests(unittest.TestCase):

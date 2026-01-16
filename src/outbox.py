@@ -23,6 +23,8 @@ def build_idempotency_key(value: str) -> str:
 async def enqueue_outbox(
     db: AsyncSession,
     idempotency_key: str,
+    account_id: int,
+    operator_id: Optional[int],
     chat_id: int,
     payload: dict
 ) -> Tuple[MessageOutbox, bool]:
@@ -35,6 +37,8 @@ async def enqueue_outbox(
 
     outbox = MessageOutbox(
         idempotency_key=idempotency_key,
+        account_id=account_id,
+        operator_id=operator_id,
         chat_id=chat_id,
         payload=payload,
         status="queued",

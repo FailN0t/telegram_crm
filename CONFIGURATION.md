@@ -23,6 +23,7 @@
 Примечания:
 - Файл сессии хранится рядом с корнем проекта как `<TELEGRAM_SESSION_NAME>.session`.
 - Если включен `TELEGRAM_STRING_SESSION`, сессия хранится в таблице `telegram_sessions`.
+- Для мульти‑аккаунтов используется таблица `telegram_accounts` (phone, session_string). `TELEGRAM_PHONE`/`TELEGRAM_STRING_SESSION` применяются к default‑аккаунту.
 
 ## AmoCRM (опционально)
 | Переменная | Обязательная | Описание | Пример |
@@ -83,6 +84,15 @@ Redis используется для:
 | `UI_BASIC_AUTH_ENABLED` | нет | Включить Basic Auth | `true` |
 | `UI_BASIC_AUTH_USERS` | нет | `user:pass:role` | `admin:pass:admin,operator:pass:operator` |
 
+Примечания:
+- Операторы создаются автоматически из логинов Basic Auth после первого отправленного сообщения.
+- Лимиты операторов (hourly/daily) задаются в БД и редактируются через `/ui/operators` (нужна роль `admin`).
+
+## Admin settings overrides
+Admin UI (`/admin/settings`) может сохранять значения в таблицу `app_settings`.
+- Эти значения переопределяют `.env` при старте приложения/worker.
+- Для некоторых параметров требуется рестарт worker (указано в UI).
+
 ## Compliance
 | Переменная | Обязательная | Описание | Пример |
 | --- | --- | --- | --- |
@@ -94,6 +104,8 @@ Redis используется для:
 | `MAX_MESSAGES_PER_HOUR` | нет | Лимит сообщений/час | `50` |
 | `MAX_NEW_CHATS_PER_DAY` | нет | Лимит новых чатов/день | `20` |
 | `MIN_DELAY_BETWEEN_MESSAGES` | нет | Минимальная задержка, сек | `5` |
+
+Per-operator лимиты хранятся в таблице `operators` и применяются поверх глобальных лимитов.
 
 ## Outbox / Worker
 | Переменная | Обязательная | Описание | Пример |

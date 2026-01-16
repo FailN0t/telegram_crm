@@ -1,6 +1,9 @@
-const state = {
+      const state = {
+        accounts: [],
         chats: [],
         activeChatId: null,
+        activeAccountId: null,
+        defaultAccountId: null,
         authorized: false,
         lastFailedPayload: null,
         chatFilter: "all",
@@ -22,6 +25,8 @@ const state = {
       const accountPhone = document.getElementById("account-phone");
       const accountStatus = document.getElementById("account-status");
       const accountLimits = document.getElementById("account-limits");
+      const accountList = document.getElementById("account-list");
+      const emptyAccounts = document.getElementById("empty-accounts");
       const collapseButton = document.getElementById("btn-collapse-accounts");
       const themeButton = document.getElementById("btn-theme");
       const statusToggle = document.getElementById("btn-status-toggle");
@@ -259,40 +264,134 @@ const state = {
         recentList.innerHTML = "";
       }
 
+      function getStoredAccountId() {
+        try {
+          const stored = localStorage.getItem("activeAccountId");
+          return stored ? Number(stored) : null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function storeAccountId(accountId) {
+        try {
+          if (accountId) {
+            localStorage.setItem("activeAccountId", String(accountId));
+          }
+        } catch (err) {
+          // ignore
+        }
+      }
+
+      function getActiveAccountStatus() {
+        if (!state.accounts.length) return null;
+        return state.accounts.find(item => item.account_id === state.activeAccountId) || state.accounts[0];
+      }
+
+      function renderAccounts() {
+        if (!accountList) return;
+        accountList.innerHTML = "";
+        if (!state.accounts.length) {
+          if (emptyAccounts) {
+            emptyAccounts.classList.remove("hidden");
+          }
+          return;
+        }
+        if (emptyAccounts) {
+          emptyAccounts.classList.add("hidden");
+        }
+        state.accounts.forEach(account => {
+          const button = document.createElement("button");
+          const active = account.account_id === state.activeAccountId;
+          button.className = active
+            ? "w-10 h-10 rounded-xl bg-primary text-white shadow-lg ring-2 ring-white/30 flex items-center justify-center transition"
+            : "w-10 h-10 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white flex items-center justify-center transition";
+          const label = account.label || account.phone_number || ("Account " + account.account_id);
+          button.title = label;
+          button.textContent = getInitials(label);
+          button.addEventListener("click", () => setActiveAccount(account.account_id));
+          accountList.appendChild(button);
+        });
+      }
+
+      async function setActiveAccount(accountId) {
+        if (!accountId || state.activeAccountId === accountId) {
+          return;
+        }
+        state.activeAccountId = accountId;
+        storeAccountId(accountId);
+        state.activeChatId = null;
+        setContactEmpty();
+        await refreshStatus();
+        await loadChats();
+        await loadMessages();
+        await loadEvents();
+        startStream();
+      }
+
       async function refreshStatus() {
         try {
-          const res = await fetch("/api/ui/status");
+          const res = await fetch("/api/ui/accounts");
           const data = await res.json();
-          statusConnection.textContent = data.connected ? "Подключено" : "Нет связи";
-          statusConnectionMeta.textContent = data.connected ? "Telegram client online" : "Проверьте соединение";
-          statusAuth.textContent = data.authorized ? "Авторизовано" : "Нет";
-          statusUser.textContent = data.user ? (data.user.username ? "@" + data.user.username : data.user.id) : "--";
-          state.authorized = data.authorized;
-          authBanner.style.display = data.authorized ? "none" : "block";
-
-          if (data.user) {
-            accountName.textContent = data.user.username ? "@" + data.user.username : ("User " + data.user.id);
-            accountPhone.textContent = data.user.phone || "--";
-          } else {
-            accountName.textContent = "Основной";
-            accountPhone.textContent = "--";
+          state.accounts = data.accounts || [];
+          state.defaultAccountId = data.default_account_id || null;
+          const knownIds = state.accounts.map(item => item.account_id);
+          let nextId = state.activeAccountId;
+          if (!nextId || !knownIds.includes(nextId)) {
+            const stored = getStoredAccountId();
+            if (stored && knownIds.includes(stored)) {
+              nextId = stored;
+            } else if (state.defaultAccountId && knownIds.includes(state.defaultAccountId)) {
+              nextId = state.defaultAccountId;
+            } else if (knownIds.length) {
+              nextId = knownIds[0];
+            }
           }
-          accountStatus.textContent = data.connected
-            ? (data.authorized ? "Online • Authorized" : "Online • Not authorized")
+          if (nextId && nextId !== state.activeAccountId) {
+            state.activeAccountId = nextId;
+            storeAccountId(nextId);
+            state.activeChatId = null;
+            setContactEmpty();
+            await loadChats();
+            await loadMessages();
+            await loadEvents();
+            startStream();
+          }
+          renderAccounts();
+
+          const active = getActiveAccountStatus();
+          const connected = active ? active.connected : false;
+          const authorized = active ? active.authorized : false;
+          statusConnection.textContent = connected ? "Подключено" : "Нет связи";
+          statusConnectionMeta.textContent = connected ? "Telegram client online" : "Проверьте соединение";
+          statusAuth.textContent = authorized ? "Авторизовано" : "Нет";
+          statusUser.textContent = active && active.user ? (active.user.username ? "@" + active.user.username : active.user.id) : "--";
+          state.authorized = authorized;
+          authBanner.style.display = authorized ? "none" : "block";
+
+          if (active && active.user) {
+            accountName.textContent = active.user.username ? "@" + active.user.username : ("User " + active.user.id);
+            accountPhone.textContent = active.user.phone || "--";
+          } else {
+            accountName.textContent = "Аккаунт";
+            accountPhone.textContent = active ? (active.phone_number || "--") : "--";
+          }
+          accountStatus.textContent = connected
+            ? (authorized ? "Online • Authorized" : "Online • Not authorized")
             : "Offline";
 
-          if (data.session) {
-            statusSession.textContent = data.session.exists ? "Сессия активна" : "Сессия отсутствует";
+          if (active && active.session) {
+            statusSession.textContent = active.session.exists ? "Сессия активна" : "Сессия отсутствует";
             const sessionMetaParts = [];
-            if (data.session.path) sessionMetaParts.push(data.session.path);
-            if (data.session.updated_at) sessionMetaParts.push(`Обновлено ${formatDateTime(data.session.updated_at)}`);
+            if (active.session.path) sessionMetaParts.push(active.session.path);
+            if (active.session.updated_at) sessionMetaParts.push(`Обновлено ${formatDateTime(active.session.updated_at)}`);
             statusSessionMeta.textContent = sessionMetaParts.join(" • ") || "--";
           }
-          if (data.anti_spam) {
-            statusLimits.textContent = `${data.anti_spam.messages_sent_this_hour}/${data.anti_spam.max_messages_per_hour} msg/h`;
-            statusLimitsMeta.textContent = `${data.anti_spam.min_delay_between_messages}s`;
-            antiSpamHint.textContent = `Лимиты: ${data.anti_spam.max_messages_per_hour} msg/h, ${data.anti_spam.max_new_chats_per_day} новых чатов/день, задержка ${data.anti_spam.min_delay_between_messages}s`;
-            accountLimits.textContent = `${data.anti_spam.messages_sent_this_hour}/${data.anti_spam.max_messages_per_hour} msg/h • ${data.anti_spam.new_chats_today}/${data.anti_spam.max_new_chats_per_day} new`;
+          if (active && active.anti_spam) {
+            statusLimits.textContent = `${active.anti_spam.messages_sent_this_hour}/${active.anti_spam.max_messages_per_hour} msg/h`;
+            statusLimitsMeta.textContent = `${active.anti_spam.min_delay_between_messages}s`;
+            antiSpamHint.textContent = `Лимиты: ${active.anti_spam.max_messages_per_hour} msg/h, ${active.anti_spam.max_new_chats_per_day} новых чатов/день, задержка ${active.anti_spam.min_delay_between_messages}s`;
+            accountLimits.textContent = `${active.anti_spam.messages_sent_this_hour}/${active.anti_spam.max_messages_per_hour} msg/h • ${active.anti_spam.new_chats_today}/${active.anti_spam.max_new_chats_per_day} new`;
           } else {
             accountLimits.textContent = "--";
           }
@@ -317,8 +416,11 @@ const state = {
       }
 
       async function loadChats() {
+        if (!state.activeAccountId) {
+          return;
+        }
         try {
-          const res = await fetch("/api/ui/chats?limit=80");
+          const res = await fetch(`/api/ui/chats?limit=80&account_id=${state.activeAccountId}`);
           const data = await res.json();
           state.chats = data.chats || [];
           if (state.activeChatId && !state.chats.find(chat => chat.chat_id === state.activeChatId)) {
@@ -333,6 +435,9 @@ const state = {
       }
 
       async function loadMessages() {
+        if (!state.activeAccountId) {
+          return;
+        }
         if (!state.activeChatId) {
           renderMessages([]);
           activeTitle.textContent = "Выберите чат";
@@ -341,7 +446,7 @@ const state = {
           return;
         }
         try {
-          const res = await fetch(`/api/ui/messages?limit=200&chat_id=${state.activeChatId}`);
+          const res = await fetch(`/api/ui/messages?limit=200&chat_id=${state.activeChatId}&account_id=${state.activeAccountId}`);
           const data = await res.json();
           renderMessages(data.messages || []);
         } catch (err) {
@@ -350,8 +455,11 @@ const state = {
       }
 
       async function loadChatDetails(chatId) {
+        if (!state.activeAccountId) {
+          return;
+        }
         try {
-          const res = await fetch(`/api/ui/chat/${chatId}`);
+          const res = await fetch(`/api/ui/chat/${chatId}?account_id=${state.activeAccountId}`);
           const data = await res.json();
           const chat = data.chat || {};
           contactName.textContent = chat.display_name || "--";
@@ -389,11 +497,11 @@ const state = {
       }
 
       async function saveProfile() {
-        if (!state.activeChatId) {
+        if (!state.activeChatId || !state.activeAccountId) {
           setResult(profileResult, false, "Выберите чат");
           return;
         }
-        const res = await fetch(`/api/ui/chat/${state.activeChatId}/profile`, {
+        const res = await fetch(`/api/ui/chat/${state.activeChatId}/profile?account_id=${state.activeAccountId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -412,6 +520,9 @@ const state = {
       }
 
       async function selectChat(chatId) {
+        if (!state.activeAccountId) {
+          await refreshStatus();
+        }
         state.activeChatId = chatId;
         const chat = state.chats.find(item => item.chat_id === chatId);
         activeTitle.textContent = chat?.display_name || chat?.username || ("User " + chatId);
@@ -420,7 +531,7 @@ const state = {
         metaParts.push("ID " + chatId);
         activeMeta.textContent = metaParts.join(" • ");
         sendHint.textContent = "Отправка в выбранный чат.";
-        await fetch(`/api/ui/chats/${chatId}/read`, { method: "POST" });
+        await fetch(`/api/ui/chats/${chatId}/read?account_id=${state.activeAccountId}`, { method: "POST" });
         await loadChats();
         await loadMessages();
         await loadChatDetails(chatId);
@@ -432,11 +543,15 @@ const state = {
           setResult(sendResult, false, "Выберите чат");
           return;
         }
+        if (!state.activeAccountId) {
+          setResult(sendResult, false, "Выберите аккаунт");
+          return;
+        }
         if (!message) {
           setResult(sendResult, false, "Сообщение пустое");
           return;
         }
-        const payload = { chat_id: state.activeChatId, message };
+        const payload = { chat_id: state.activeChatId, message, account_id: state.activeAccountId };
         const res = await fetch("/api/ui/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -466,6 +581,10 @@ const state = {
         const username = document.getElementById("new-username").value.trim();
         const phone = document.getElementById("new-phone").value.trim();
         const message = document.getElementById("new-message").value.trim();
+        if (!state.activeAccountId) {
+          setResult(newResult, false, "Выберите аккаунт");
+          return;
+        }
         if (!username && !phone) {
           setResult(newResult, false, "Укажите username или телефон");
           return;
@@ -474,7 +593,7 @@ const state = {
           setResult(newResult, false, "Сообщение пустое");
           return;
         }
-        const payload = { username: username || null, phone: phone || null, message };
+        const payload = { username: username || null, phone: phone || null, message, account_id: state.activeAccountId };
         const res = await fetch("/api/ui/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -506,6 +625,9 @@ const state = {
 
       async function retryLast() {
         if (!state.lastFailedPayload) return;
+        if (!state.lastFailedPayload.account_id && state.activeAccountId) {
+          state.lastFailedPayload.account_id = state.activeAccountId;
+        }
         const res = await fetch("/api/ui/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -524,7 +646,7 @@ const state = {
       }
 
       async function logout() {
-        const res = await fetch("/api/ui/auth/logout", { method: "POST" });
+        const res = await fetch(`/api/ui/auth/logout?account_id=${state.activeAccountId}`, { method: "POST" });
         const data = await res.json();
         setResult(sendResult, data.success, data.message || data.status || "");
         state.activeChatId = null;
@@ -598,10 +720,14 @@ const state = {
           scheduleFallbackPolling();
           return;
         }
+        if (!state.activeAccountId) {
+          scheduleFallbackPolling();
+          return;
+        }
         if (stream) {
           stream.close();
         }
-        stream = new EventSource("/api/ui/stream");
+        stream = new EventSource(`/api/ui/stream?account_id=${state.activeAccountId}`);
         stream.addEventListener("ui_message", async (event) => {
           const payload = JSON.parse(event.data);
           if (payload.chat_id) {

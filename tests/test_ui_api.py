@@ -1,6 +1,7 @@
 import os
 import asyncio
 import unittest
+from datetime import datetime
 from sqlalchemy import select
 from types import SimpleNamespace
 
@@ -13,7 +14,14 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_ui.db")
 from fastapi.testclient import TestClient
 
 from src import api_server
-from src.database import init_db, SessionLocal, UiMessageHistory, UiEventLog
+from src.database import (
+    init_db,
+    SessionLocal,
+    UiMessageHistory,
+    UiEventLog,
+    Operator,
+    MessageOutbox
+)
 
 
 class DummyAntiSpam:
@@ -42,12 +50,14 @@ class DummyUser:
 
 class DummyTelegram:
     def __init__(self):
+        self.account_id = 1
         self.client = SimpleNamespace(is_connected=lambda: True)
         self.me = DummyUser(1, "me")
         self.anti_spam = DummyAntiSpam()
         self.send_count = 0
         self._messages = [
             {
+                "account_id": 1,
                 "id": 1,
                 "direction": "inbound",
                 "chat_id": 42,
@@ -59,6 +69,7 @@ class DummyTelegram:
         ]
         self._chats = [
             {
+                "account_id": 1,
                 "chat_id": 42,
                 "username": "demo",
                 "display_name": "Demo User",
@@ -99,6 +110,7 @@ class DummyTelegram:
 
     async def get_chat_details(self, chat_id):
         return {
+            "account_id": 1,
             "chat_id": chat_id,
             "username": "demo",
             "display_name": "Demo User",
@@ -123,7 +135,7 @@ class DummyTelegram:
     async def find_user_by_phone(self, phone):
         return DummyUser(43, "phone")
 
-    async def send_message_to_user(self, user, message):
+    async def send_message_to_user(self, user, message, operator_id=None):
         self.send_count += 1
         return True, "Успешно отправлено"
 
@@ -138,8 +150,50 @@ class DummyTelegram:
 
 class DummyBridge:
     def __init__(self):
-        self.telegram = DummyTelegram()
+        self.telegram = DummyManager()
         self.amocrm = None
+
+
+class DummyManager:
+    def __init__(self):
+        self._client = DummyTelegram()
+
+    @property
+    def send_count(self):
+        return self._client.send_count
+
+    @send_count.setter
+    def send_count(self, value):
+        self._client.send_count = value
+
+    async def get_status(self):
+        user = {
+            "id": self._client.me.id,
+            "username": self._client.me.username,
+            "phone": self._client.me.phone,
+        }
+        return [
+            {
+                "account_id": self._client.account_id,
+                "phone_number": self._client.me.phone,
+                "label": "Test Account",
+                "is_active": True,
+                "connected": True,
+                "authorized": True,
+                "user": user,
+                "session": self._client.get_session_info(),
+                "anti_spam": self._client.anti_spam.get_stats(),
+            }
+        ]
+
+    async def get_default_account_id(self):
+        return self._client.account_id
+
+    async def select_account_id(self):
+        return self._client.account_id
+
+    async def get_client(self, account_id):
+        return self._client
 
 
 class UiApiTests(unittest.TestCase):
@@ -154,6 +208,7 @@ class UiApiTests(unittest.TestCase):
                 await session.execute(UiMessageHistory.__table__.delete())
                 await session.execute(UiEventLog.__table__.delete())
                 session.add(UiMessageHistory(
+                    account_id=1,
                     chat_id=42,
                     direction="inbound",
                     message_text="hello",
@@ -181,6 +236,13 @@ class UiApiTests(unittest.TestCase):
         self.assertTrue(data["authorized"])
         self.assertIn("session", data)
         self.assertIn("anti_spam", data)
+
+    def test_ui_accounts(self):
+        resp = self.client.get("/api/ui/accounts")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("accounts", data)
+        self.assertTrue(len(data["accounts"]) >= 1)
 
     def test_health_endpoints(self):
         live = self.client.get("/live")
@@ -241,6 +303,78 @@ class UiApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         data = resp.json()
         self.assertFalse(data["success"])
+
+    def test_ui_operators_list(self):
+        async def _setup():
+            async with SessionLocal() as session:
+                operator = Operator(
+                    username="alice",
+                    display_name="Alice",
+                    email="alice@example.com",
+                    hourly_limit=12,
+                    daily_limit=34
+                )
+                session.add(operator)
+                await session.commit()
+                await session.refresh(operator)
+
+                outbox = MessageOutbox(
+                    idempotency_key="op-1",
+                    account_id=1,
+                    operator_id=operator.id,
+                    chat_id=101,
+                    payload={"text": "hi"},
+                    status="sent",
+                    created_at=datetime.utcnow()
+                )
+                session.add(outbox)
+                await session.commit()
+
+        asyncio.run(_setup())
+        resp = self.client.get("/api/ui/operators")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(any(item["username"] == "alice" for item in data["operators"]))
+
+    def test_ui_operator_update_requires_admin(self):
+        async def _setup():
+            async with SessionLocal() as session:
+                operator = Operator(
+                    username="bob",
+                    display_name="Bob",
+                    email="bob@example.com",
+                    hourly_limit=10,
+                    daily_limit=20
+                )
+                session.add(operator)
+                await session.commit()
+                await session.refresh(operator)
+                return operator.id
+
+        operator_id = asyncio.run(_setup())
+        resp = self.client.patch(
+            f"/api/ui/operators/{operator_id}",
+            json={"hourly_limit": 25, "daily_limit": 50}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+        api_server.settings.UI_BASIC_AUTH_ENABLED = True
+        api_server.settings.UI_BASIC_AUTH_USERS = "admin:pass:admin"
+        api_server._ui_users_cache["raw"] = None
+        resp = self.client.patch(
+            f"/api/ui/operators/{operator_id}",
+            json={"hourly_limit": 25, "daily_limit": 50},
+            auth=("admin", "pass")
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["operator"]["hourly_limit"], 25)
+        self.assertEqual(data["operator"]["daily_limit"], 50)
+
+        api_server.settings.UI_BASIC_AUTH_ENABLED = False
+        api_server.settings.UI_BASIC_AUTH_USERS = None
+        api_server._ui_users_cache["raw"] = None
 
     def test_chat_profile_crud(self):
         update = self.client.post(

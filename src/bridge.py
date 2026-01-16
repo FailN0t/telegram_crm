@@ -7,7 +7,7 @@ from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from src.telegram_client import MTProtoClient
+from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
 from src.database import ChatMapping, MessageHistory
 from src.config import settings
@@ -20,7 +20,7 @@ class AmoCRMTelegramBridge:
     Координирует работу обоих клиентов
     """
     
-    def __init__(self, telegram: MTProtoClient, amocrm: Optional[AmoCRMClient]):
+    def __init__(self, telegram: TelegramClientManager, amocrm: Optional[AmoCRMClient]):
         self.telegram = telegram
         self.amocrm = amocrm
         logger.info("🌉 Bridge инициализирован")
@@ -31,7 +31,8 @@ class AmoCRMTelegramBridge:
         contact_id: int,
         phone: Optional[str],
         username: Optional[str],
-        message: str
+        message: str,
+        account_id: Optional[int] = None
     ) -> Tuple[bool, str]:
         """
         Отправка сообщения клиенту из AmoCRM
@@ -68,17 +69,31 @@ class AmoCRMTelegramBridge:
                 return False, error_msg
         
         # Проверяем, есть ли уже связь в БД
+        mapping_query = {"amocrm_contact_id": contact_id}
+        if account_id:
+            mapping_query["account_id"] = account_id
         result = await db.execute(
-            select(ChatMapping).filter_by(amocrm_contact_id=contact_id)
+            select(ChatMapping).filter_by(**mapping_query)
         )
         mapping = result.scalars().first()
+
+        if not account_id and mapping:
+            account_id = mapping.account_id
+
+        if not account_id:
+            account_id = await self.telegram.select_account_id()
+
+        if not account_id:
+            return False, "no_active_accounts"
+
+        client = await self.telegram.get_client(account_id)
         
         user = None
         
         if mapping and mapping.telegram_chat_id:
             # Есть связь - получаем пользователя по chat_id
             try:
-                user = await self.telegram.client.get_entity(mapping.telegram_chat_id)
+                user = await client.client.get_entity(mapping.telegram_chat_id)
                 logger.info(f"✅ Найден по сохраненному chat_id: {mapping.telegram_chat_id}")
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось получить по chat_id: {e}")
@@ -88,11 +103,11 @@ class AmoCRMTelegramBridge:
         if not user:
             # Сначала пробуем по username (быстрее и надежнее)
             if username:
-                user = await self.telegram.find_user_by_username(username)
+                user = await client.find_user_by_username(username)
             
             # Если не нашли, пробуем по телефону
             if not user and phone:
-                user = await self.telegram.find_user_by_phone(phone)
+                user = await client.find_user_by_phone(phone)
         
         if not user:
             error_msg = "Пользователь не найден в Telegram"
@@ -104,7 +119,7 @@ class AmoCRMTelegramBridge:
         is_new_chat = not mapping or not mapping.telegram_chat_id
         
         # Отправляем сообщение
-        success, result = await self.telegram.send_message_to_user(
+        success, result = await client.send_message_to_user(
             user,
             message,
             is_new_chat
@@ -114,6 +129,7 @@ class AmoCRMTelegramBridge:
             # Сохраняем/обновляем связь в БД
             if not mapping:
                 mapping = ChatMapping(
+                    account_id=account_id,
                     telegram_chat_id=user.id,
                     telegram_username=user.username,
                     telegram_first_name=user.first_name,
@@ -132,6 +148,7 @@ class AmoCRMTelegramBridge:
             
             # Сохраняем сообщение в историю
             history = MessageHistory(
+                account_id=account_id,
                 chat_mapping_id=mapping.id,
                 amocrm_contact_id=contact_id,
                 direction='outbound',
@@ -169,6 +186,7 @@ class AmoCRMTelegramBridge:
             # Если FloodWait - сохраняем в БД для повторной отправки
             if "FloodWait" in result:
                 history = MessageHistory(
+                    account_id=account_id,
                     chat_mapping_id=mapping.id if mapping else 0,
                     amocrm_contact_id=contact_id,
                     direction='outbound',
@@ -266,9 +284,14 @@ class AmoCRMTelegramBridge:
         total_messages = await db.scalar(
             select(func.count()).select_from(MessageHistory)
         )
+
+        telegram_status = await self.telegram.get_status()
         
         return {
-            "telegram": self.telegram.get_stats(),
+            "telegram": {
+                "accounts": telegram_status,
+                "active_accounts": len([a for a in telegram_status if a.get("is_active")]),
+            },
             "mappings": {
                 "total": total_mappings,
                 "active": active_mappings,

@@ -21,6 +21,7 @@ class UiMessageHistoryTests(unittest.TestCase):
         async def _run():
             async with SessionLocal() as session:
                 entry = UiMessageHistory(
+                    account_id=1,
                     chat_id=123,
                     direction="outbound",
                     message_text="hello",

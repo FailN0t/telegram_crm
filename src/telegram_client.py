@@ -31,6 +31,7 @@ from src.database import (
     ChatMapping,
     ChatProfile,
     MessageHistory,
+    TelegramAccount,
     TelegramSession,
     UiChat,
     UiMessageHistory,
@@ -44,8 +45,16 @@ class MTProtoClient:
     Использует личный аккаунт (не бота)
     """
     
-    def __init__(self):
-        session_string = settings.TELEGRAM_STRING_SESSION
+    def __init__(
+        self,
+        account_id: int,
+        phone_number: Optional[str] = None,
+        session_string: Optional[str] = None,
+        session_name: Optional[str] = None
+    ):
+        self.account_id = account_id
+        self.phone_number = phone_number or settings.TELEGRAM_PHONE
+        self.session_name = session_name or f"{settings.TELEGRAM_SESSION_NAME}_{account_id}"
         if session_string:
             self.client = TelegramClient(
                 StringSession(session_string),
@@ -55,12 +64,12 @@ class MTProtoClient:
             self._using_string_session = True
         else:
             self.client = TelegramClient(
-                settings.TELEGRAM_SESSION_NAME,
+                self.session_name,
                 settings.TELEGRAM_API_ID,
                 settings.TELEGRAM_API_HASH
             )
             self._using_string_session = False
-        self.anti_spam = AntiSpamManager()
+        self.anti_spam = AntiSpamManager(account_id=self.account_id)
         self.me = None
         self._handlers_registered = False
         self._auth_phone = None
@@ -68,13 +77,23 @@ class MTProtoClient:
         self._recent_chat_ids: set[int] = set()
 
     async def _load_string_session(self) -> Optional[str]:
-        if settings.TELEGRAM_STRING_SESSION:
+        if (
+            settings.TELEGRAM_STRING_SESSION
+            and self.phone_number == settings.TELEGRAM_PHONE
+        ):
             return settings.TELEGRAM_STRING_SESSION
 
         async with SessionLocal() as session:
             try:
                 result = await session.execute(
-                    select(TelegramSession).filter_by(phone=settings.TELEGRAM_PHONE)
+                    select(TelegramAccount).filter_by(id=self.account_id)
+                )
+                account = result.scalars().first()
+                if account and account.session_string:
+                    return account.session_string
+
+                result = await session.execute(
+                    select(TelegramSession).filter_by(phone=self.phone_number)
                 )
                 record = result.scalars().first()
                 if record:
@@ -96,7 +115,25 @@ class MTProtoClient:
         async with SessionLocal() as session:
             try:
                 result = await session.execute(
-                    select(TelegramSession).filter_by(phone=settings.TELEGRAM_PHONE)
+                    select(TelegramAccount).filter_by(id=self.account_id)
+                )
+                account = result.scalars().first()
+                if account:
+                    account.session_string = session_string
+                    account.updated_at = datetime.utcnow()
+                else:
+                    account = TelegramAccount(
+                        id=self.account_id,
+                        phone_number=self.phone_number,
+                        session_string=session_string,
+                        label=self.phone_number,
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+                    session.add(account)
+
+                result = await session.execute(
+                    select(TelegramSession).filter_by(phone=self.phone_number)
                 )
                 record = result.scalars().first()
                 if record:
@@ -104,7 +141,7 @@ class MTProtoClient:
                     record.updated_at = datetime.utcnow()
                 else:
                     record = TelegramSession(
-                        phone=settings.TELEGRAM_PHONE,
+                        phone=self.phone_number,
                         session_string=session_string,
                         created_at=datetime.utcnow(),
                         updated_at=datetime.utcnow()
@@ -180,6 +217,7 @@ class MTProtoClient:
             async with SessionLocal() as session:
                 result = await session.execute(
                     select(UiChat.chat_id)
+                    .filter_by(account_id=self.account_id)
                     .order_by(UiChat.last_timestamp.desc().nullslast())
                     .limit(limit)
                 )
@@ -191,7 +229,7 @@ class MTProtoClient:
         if self._session_paths:
             return self._session_paths
 
-        base = Path(settings.TELEGRAM_SESSION_NAME)
+        base = Path(self.session_name)
         if base.suffix == ".session":
             session_path = base
         else:
@@ -217,7 +255,8 @@ class MTProtoClient:
         return info
 
     def reset_local_state(self):
-        pass
+        self._recent_chat_ids.clear()
+        self._auth_phone = None
 
     async def logout(self) -> Tuple[bool, str]:
         """Выход из аккаунта и очистка локальной сессии"""
@@ -262,7 +301,7 @@ class MTProtoClient:
         if await self.client.is_user_authorized():
             return True, "already_authorized"
 
-        phone = phone or settings.TELEGRAM_PHONE
+        phone = phone or self.phone_number
         if not phone:
             return False, "phone_required"
 
@@ -287,7 +326,7 @@ class MTProtoClient:
     async def submit_code(self, code: str, phone: Optional[str] = None) -> Tuple[bool, str]:
         """Подтверждение кода авторизации"""
         await self.connect()
-        phone = phone or self._auth_phone or settings.TELEGRAM_PHONE
+        phone = phone or self._auth_phone or self.phone_number
 
         if not phone:
             return False, "phone_required"
@@ -320,7 +359,7 @@ class MTProtoClient:
             await self.client.sign_in(password=password)
             redis = await get_redis()
             if redis:
-                phone = self._auth_phone or settings.TELEGRAM_PHONE
+                phone = self._auth_phone or self.phone_number
                 if phone:
                     await redis.delete(f"auth:phone_code_hash:{phone}")
             await self._on_authorized()
@@ -359,6 +398,7 @@ class MTProtoClient:
         async with SessionLocal() as session:
             try:
                 history = UiMessageHistory(
+                    account_id=self.account_id,
                     chat_id=chat_id,
                     direction=direction,
                     message_text=text,
@@ -406,11 +446,11 @@ class MTProtoClient:
         increment_unread: bool
     ) -> None:
         result = await session.execute(
-            select(UiChat).filter_by(chat_id=chat_id)
+            select(UiChat).filter_by(chat_id=chat_id, account_id=self.account_id)
         )
         chat = result.scalars().first()
         if not chat:
-            chat = UiChat(chat_id=chat_id)
+            chat = UiChat(chat_id=chat_id, account_id=self.account_id)
             session.add(chat)
 
         if username:
@@ -495,7 +535,7 @@ class MTProtoClient:
         chat_id: Optional[int] = None
     ) -> list[dict]:
         async with SessionLocal() as session:
-            stmt = select(UiMessageHistory)
+            stmt = select(UiMessageHistory).filter_by(account_id=self.account_id)
             if chat_id is not None:
                 stmt = stmt.filter_by(chat_id=chat_id)
             stmt = stmt.order_by(UiMessageHistory.created_at.desc()).limit(limit)
@@ -504,6 +544,7 @@ class MTProtoClient:
             rows.reverse()
             return [
                 {
+                    "account_id": self.account_id,
                     "id": row.id,
                     "direction": row.direction,
                     "chat_id": row.chat_id,
@@ -542,6 +583,7 @@ class MTProtoClient:
         async with SessionLocal() as session:
             stmt = (
                 select(UiChat)
+                .filter_by(account_id=self.account_id)
                 .order_by(
                     UiChat.last_timestamp.desc().nullslast(),
                     UiChat.updated_at.desc()
@@ -554,6 +596,7 @@ class MTProtoClient:
             for row in rows:
                 timestamp = row.last_timestamp.isoformat() + "Z" if row.last_timestamp else None
                 chats.append({
+                    "account_id": self.account_id,
                     "chat_id": row.chat_id,
                     "username": row.username or "",
                     "display_name": row.display_name or self._format_chat_name(
@@ -576,11 +619,11 @@ class MTProtoClient:
     async def get_chat_details(self, chat_id: int) -> dict:
         async with SessionLocal() as session:
             result = await session.execute(
-                select(UiChat).filter_by(chat_id=chat_id)
+                select(UiChat).filter_by(chat_id=chat_id, account_id=self.account_id)
             )
             chat = result.scalars().first()
 
-        base = {"chat_id": chat_id}
+        base = {"chat_id": chat_id, "account_id": self.account_id}
         if chat:
             base.update({
                 "chat_id": chat.chat_id,
@@ -619,6 +662,7 @@ class MTProtoClient:
         details = dict(base)
         details.update({
             "chat_id": chat_id,
+            "account_id": self.account_id,
             "username": username or "",
             "first_name": first_name or "",
             "last_name": last_name or "",
@@ -647,12 +691,15 @@ class MTProtoClient:
     async def get_chat_history_stats(self, chat_id: int) -> dict:
         async with SessionLocal() as session:
             total_result = await session.execute(
-                select(func.count()).select_from(UiMessageHistory).filter_by(chat_id=chat_id)
+                select(func.count())
+                .select_from(UiMessageHistory)
+                .filter_by(chat_id=chat_id, account_id=self.account_id)
             )
             total = total_result.scalar() or 0
             inbound_result = await session.execute(
                 select(func.count()).select_from(UiMessageHistory).filter_by(
                     chat_id=chat_id,
+                    account_id=self.account_id,
                     direction="inbound"
                 )
             )
@@ -660,6 +707,7 @@ class MTProtoClient:
             outbound_result = await session.execute(
                 select(func.count()).select_from(UiMessageHistory).filter_by(
                     chat_id=chat_id,
+                    account_id=self.account_id,
                     direction="outbound"
                 )
             )
@@ -667,12 +715,14 @@ class MTProtoClient:
             last_inbound_result = await session.execute(
                 select(func.max(UiMessageHistory.created_at)).filter_by(
                     chat_id=chat_id,
+                    account_id=self.account_id,
                     direction="inbound"
                 )
             )
             last_outbound_result = await session.execute(
                 select(func.max(UiMessageHistory.created_at)).filter_by(
                     chat_id=chat_id,
+                    account_id=self.account_id,
                     direction="outbound"
                 )
             )
@@ -690,7 +740,7 @@ class MTProtoClient:
     async def mark_chat_read(self, chat_id: int) -> None:
         async with SessionLocal() as session:
             result = await session.execute(
-                select(UiChat).filter_by(chat_id=chat_id)
+                select(UiChat).filter_by(chat_id=chat_id, account_id=self.account_id)
             )
             chat = result.scalars().first()
             if chat:
@@ -814,7 +864,10 @@ class MTProtoClient:
     async def _check_compliance(self, chat_id: int) -> Tuple[bool, str]:
         async with SessionLocal() as session:
             result = await session.execute(
-                select(ChatProfile).filter_by(telegram_chat_id=chat_id)
+                select(ChatProfile).filter_by(
+                    telegram_chat_id=chat_id,
+                    account_id=self.account_id
+                )
             )
             profile = result.scalars().first()
 
@@ -848,7 +901,8 @@ class MTProtoClient:
         self,
         user: User,
         message: str,
-        is_new_chat: Optional[bool] = None
+        is_new_chat: Optional[bool] = None,
+        operator_id: Optional[int] = None
     ) -> Tuple[bool, str]:
         """
         Отправка сообщения пользователю
@@ -883,12 +937,19 @@ class MTProtoClient:
         if is_new_chat is None:
             async with SessionLocal() as session:
                 result = await session.execute(
-                    select(UiChat).filter_by(chat_id=user.id)
+                    select(UiChat).filter_by(
+                        chat_id=user.id,
+                        account_id=self.account_id
+                    )
                 )
                 is_new_chat = result.scalars().first() is None
 
         # Проверка anti-spam (атомарно с регистрацией)
-        can_send, reason = await self.anti_spam.try_register_send(user.id, is_new_chat)
+        can_send, reason = await self.anti_spam.try_register_send(
+            user.id,
+            is_new_chat,
+            operator_id=operator_id
+        )
         if not can_send:
             logger.warning(f"⚠️ Anti-spam блокировка: {reason}")
             await self._store_message(
@@ -1056,13 +1117,17 @@ class MTProtoClient:
                 async with SessionLocal() as db:
                     # Ищем или создаем маппинг
                     result = await db.execute(
-                        select(ChatMapping).filter_by(telegram_chat_id=sender.id)
+                        select(ChatMapping).filter_by(
+                            telegram_chat_id=sender.id,
+                            account_id=self.account_id
+                        )
                     )
                     mapping = result.scalars().first()
 
                     if mapping:
                         # Сохраняем сообщение в историю
                         history = MessageHistory(
+                            account_id=self.account_id,
                             chat_mapping_id=mapping.id,
                             amocrm_contact_id=mapping.amocrm_contact_id,
                             direction='inbound',
@@ -1106,6 +1171,7 @@ class MTProtoClient:
     def get_stats(self) -> dict:
         """Получить статистику"""
         return {
+            "account_id": self.account_id,
             "client_status": "connected" if self.client.is_connected() else "disconnected",
             "user": {
                 "id": self.me.id if self.me else None,

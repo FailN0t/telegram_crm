@@ -31,9 +31,11 @@
   "contact_id": 123456,
   "phone": "+79990000000",
   "username": "telegram_username",
+  "account_id": 1,
   "message": "Привет!"
 }
 ```
+`account_id` опционален — если не задан, используется маппинг контакта или round‑robin среди активных аккаунтов.
 
 **Ответ (успех)**
 ```json
@@ -83,31 +85,136 @@ Webhook от AmoCRM (создание задач).
 - `connected`, `authorized`, `user`
 - `session` (файл или StringSession)
 - `anti_spam` (текущие лимиты)
+- `accounts` (статусы всех аккаунтов)
+- `default_account_id`
+
+### `GET /api/ui/accounts`
+Список Telegram аккаунтов и их статусы.
 
 ### `GET /api/ui/events`
 Список последних событий UI.
+
+### `GET /api/ui/operators`
+Список операторов и их лимитов.
+
+**Ответ**
+```json
+{
+  "operators": [
+    {
+      "id": 1,
+      "username": "operator",
+      "display_name": "Operator",
+      "email": "operator@example.com",
+      "hourly_limit": 50,
+      "daily_limit": 200,
+      "sent_last_hour": 12,
+      "sent_last_day": 120,
+      "created_at": "2026-01-16T10:00:00Z"
+    }
+  ]
+}
+```
+
+### `PATCH /api/ui/operators/{operator_id}`
+Обновление лимитов оператора. Требуется роль `admin`.
+
+**Body**
+```json
+{
+  "display_name": "Operator",
+  "email": "operator@example.com",
+  "hourly_limit": 60,
+  "daily_limit": 240
+}
+```
+
+**Ответ**
+```json
+{
+  "success": true,
+  "operator": {
+    "id": 1,
+    "username": "operator",
+    "display_name": "Operator",
+    "email": "operator@example.com",
+    "hourly_limit": 60,
+    "daily_limit": 240
+  }
+}
+```
 
 ### `GET /api/ui/stream`
 SSE‑поток событий.
 
 **Query**
 - `last_message_id`, `last_event_id` — для восстановления.
+- `account_id` — фильтр по аккаунту.
 
 **События**
 - `event: ui_message`
 - `event: ui_event`
 
+## Admin API
+
+> Требуется Basic Auth с ролью `admin`.
+
+### `GET /api/admin/summary`
+Сводка по системе (аккаунты, операторы, outbox, последнее событие).
+
+### `GET /api/admin/accounts`
+Список Telegram аккаунтов (label, active, статус).
+
+### `PATCH /api/admin/accounts/{account_id}`
+Обновление `label` и `is_active` аккаунта.
+
+**Body**
+```json
+{
+  "label": "Team A",
+  "is_active": true
+}
+```
+
+### `GET /api/admin/settings`
+Список admin‑настроек и их текущие значения.
+
+### `PATCH /api/admin/settings`
+Обновление admin‑настроек.
+
+**Body**
+```json
+{
+  "values": {
+    "MAX_MESSAGES_PER_HOUR": 60,
+    "OUTBOX_POLL_INTERVAL": 3
+  }
+}
+```
+
 ### `GET /api/ui/chats`
 Список чатов (для UI).
+
+**Query**
+- `account_id` — аккаунт, для которого вернуть список.
 
 ### `POST /api/ui/chats/{chat_id}/read`
 Сброс счётчика непрочитанных.
 
+**Query**
+- `account_id`
+
 ### `GET /api/ui/chat/{chat_id}`
 Детали чата: профиль + статистика.
 
+**Query**
+- `account_id`
+
 ### `POST /api/ui/chat/{chat_id}/profile`
 Обновление профиля (tags/notes/consent/quiet hours).
+
+**Query**
+- `account_id`
 
 **Body**
 ```json
@@ -127,7 +234,7 @@ SSE‑поток событий.
 
 **Body**
 ```json
-{ "phone": "+79990000000" }
+{ "phone": "+79990000000", "account_id": 1 }
 ```
 
 ### `POST /api/ui/auth/submit-code`
@@ -135,7 +242,7 @@ SSE‑поток событий.
 
 **Body**
 ```json
-{ "phone": "+79990000000", "code": "12345" }
+{ "phone": "+79990000000", "code": "12345", "account_id": 1 }
 ```
 
 ### `POST /api/ui/auth/submit-password`
@@ -143,11 +250,14 @@ SSE‑поток событий.
 
 **Body**
 ```json
-{ "password": "your-2fa" }
+{ "password": "your-2fa", "account_id": 1 }
 ```
 
 ### `POST /api/ui/auth/logout`
 Выход и удаление локальной сессии.
+
+**Query**
+- `account_id`
 
 ### `POST /api/ui/send`
 Отправка сообщения из UI.
@@ -158,6 +268,7 @@ SSE‑поток событий.
   "chat_id": 123456,
   "username": "telegram_username",
   "phone": "+79990000000",
+  "account_id": 1,
   "message": "Привет!",
   "idempotency_key": "optional"
 }
@@ -169,6 +280,7 @@ SSE‑поток событий.
 **Query**
 - `limit` (по умолчанию 50)
 - `chat_id` (опционально)
+- `account_id`
 
 ## UI страницы
 - `/ui/auth` — авторизация MTProto.

@@ -53,7 +53,7 @@ def main() -> None:
         css_min = _minify_css(css_path.read_text(encoding="utf-8"))
         (static_dir / "styles.min.css").write_text(css_min + "\n", encoding="utf-8")
 
-    for js_name in ("app.js", "auth.js"):
+    for js_name in ("app.js", "auth.js", "operators.js", "admin.js"):
         js_path = static_dir / js_name
         if not js_path.exists():
             continue

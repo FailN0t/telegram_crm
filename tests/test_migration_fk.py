@@ -131,6 +131,7 @@ class MigrationFKTests(unittest.TestCase):
 
                 # Create valid parent-child relationship
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=12345,
                     amocrm_contact_id=999,
                     telegram_username="test"
@@ -140,6 +141,7 @@ class MigrationFKTests(unittest.TestCase):
 
                 outbox = MessageOutbox(
                     idempotency_key="test-1",
+                    account_id=1,
                     chat_id=12345,
                     payload={"text": "test"},
                     status="queued"

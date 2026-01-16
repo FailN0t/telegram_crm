@@ -11,24 +11,34 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Res
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Any, Dict
+from datetime import datetime, timedelta
 import secrets
 import uuid
 import json
 import hashlib
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text, select, or_
+from sqlalchemy import text, select, or_, func
 
 from src.config import settings
 from src.logger import logger
 from src.database import (
     get_db,
+    ChatMapping,
     ChatProfile,
+    Operator,
+    TelegramAccount,
     MessageInbox,
+    MessageOutbox,
     UiMessageHistory,
     UiEventLog,
     SessionLocal
+)
+from src.app_settings import (
+    ALLOWED_SETTINGS,
+    refresh_settings_from_db,
+    update_settings_overrides,
+    get_settings_payload
 )
 from src.bridge import AmoCRMTelegramBridge
 from src.outbox import (
@@ -75,6 +85,7 @@ class SendMessageRequest(BaseModel):
     contact_id: int = Field(..., description="ID контакта в AmoCRM")
     phone: Optional[str] = Field(None, description="Номер телефона (с +)")
     username: Optional[str] = Field(None, description="Username в Telegram")
+    account_id: Optional[int] = Field(None, description="ID Telegram аккаунта")
     message: str = Field(..., description="Текст сообщения")
 
 
@@ -105,6 +116,7 @@ class UiSendRequest(BaseModel):
     chat_id: Optional[int] = None
     username: Optional[str] = None
     phone: Optional[str] = None
+    account_id: Optional[int] = None
     message: str
     idempotency_key: Optional[str] = None
 
@@ -112,17 +124,20 @@ class UiSendRequest(BaseModel):
 class UiAuthRequest(BaseModel):
     """Запрос кода авторизации"""
     phone: Optional[str] = None
+    account_id: Optional[int] = None
 
 
 class UiAuthCodeRequest(BaseModel):
     """Отправка кода авторизации"""
     phone: Optional[str] = None
     code: str
+    account_id: Optional[int] = None
 
 
 class UiAuthPasswordRequest(BaseModel):
     """Отправка 2FA пароля"""
     password: str
+    account_id: Optional[int] = None
 
 
 class UiChatProfileUpdate(BaseModel):
@@ -134,6 +149,25 @@ class UiChatProfileUpdate(BaseModel):
     quiet_hours_start: Optional[str] = None
     quiet_hours_end: Optional[str] = None
     timezone: Optional[str] = None
+
+
+class OperatorUpdateRequest(BaseModel):
+    """Обновление лимитов оператора"""
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    hourly_limit: Optional[int] = None
+    daily_limit: Optional[int] = None
+
+
+class AdminAccountUpdateRequest(BaseModel):
+    """Обновление Telegram аккаунта"""
+    label: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AdminSettingsUpdateRequest(BaseModel):
+    """Обновление admin-настроек"""
+    values: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Глобальные переменные (будут инициализированы в main)
@@ -186,6 +220,39 @@ def get_ui_users() -> dict:
     return parsed
 
 
+async def resolve_account_id(account_id: Optional[int]) -> int:
+    if not bridge or not bridge.telegram:
+        raise HTTPException(status_code=503, detail="Telegram not initialized")
+    if account_id:
+        return account_id
+    default_id = await bridge.telegram.get_default_account_id()
+    if not default_id:
+        raise HTTPException(status_code=503, detail="No active Telegram accounts")
+    return default_id
+
+
+async def get_client_for_account(account_id: Optional[int]):
+    resolved_id = await resolve_account_id(account_id)
+    return resolved_id, await bridge.telegram.get_client(resolved_id)
+
+
+async def resolve_operator_id(db: AsyncSession, ui_user: dict) -> Optional[int]:
+    username = (ui_user.get("username") or "").strip()
+    if not username or username == "anonymous":
+        return None
+    result = await db.execute(
+        select(Operator).filter_by(username=username)
+    )
+    operator = result.scalars().first()
+    if operator:
+        return operator.id
+    operator = Operator(username=username, display_name=username)
+    db.add(operator)
+    await db.commit()
+    await db.refresh(operator)
+    return operator.id
+
+
 async def require_ui_auth(
     request: Request,
     credentials: Optional[HTTPBasicCredentials] = Depends(basic_scheme)
@@ -232,6 +299,12 @@ async def require_ui_auth(
         {"path": request.url.path, "username": credentials.username}
     )
     return {"username": credentials.username, "role": record["role"]}
+
+
+async def require_admin(ui_user: dict = Depends(require_ui_auth)):
+    if ui_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    return ui_user
 
 
 def ui_error_response(
@@ -386,6 +459,54 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache"}
         )
 
+    @app.get("/ui/operators", tags=["UI"])
+    async def ui_operators_page(ui_user: dict = Depends(require_ui_auth)):
+        """Страница операторов"""
+        page_path = STATIC_DIR / "operators.html"
+        if not page_path.exists():
+            raise HTTPException(status_code=404, detail="UI not found")
+        return FileResponse(
+            page_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/admin", tags=["Admin"])
+    async def admin_root(ui_user: dict = Depends(require_admin)):
+        """Admin dashboard"""
+        page_path = STATIC_DIR / "admin.html"
+        if not page_path.exists():
+            raise HTTPException(status_code=404, detail="UI not found")
+        return FileResponse(
+            page_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/admin/accounts", tags=["Admin"])
+    async def admin_accounts_page(ui_user: dict = Depends(require_admin)):
+        """Admin accounts page"""
+        page_path = STATIC_DIR / "admin_accounts.html"
+        if not page_path.exists():
+            raise HTTPException(status_code=404, detail="UI not found")
+        return FileResponse(
+            page_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/admin/settings", tags=["Admin"])
+    async def admin_settings_page(ui_user: dict = Depends(require_admin)):
+        """Admin settings page"""
+        page_path = STATIC_DIR / "admin_settings.html"
+        if not page_path.exists():
+            raise HTTPException(status_code=404, detail="UI not found")
+        return FileResponse(
+            page_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"}
+        )
+
     async def _check_health(db: AsyncSession) -> dict:
         db_connected = True
         try:
@@ -395,7 +516,8 @@ def create_app() -> FastAPI:
 
         telegram_connected = False
         if bridge and bridge.telegram:
-            telegram_connected = bridge.telegram.client.is_connected()
+            statuses = await bridge.telegram.get_status()
+            telegram_connected = any(item.get("connected") for item in statuses)
 
         status = "healthy" if (db_connected and telegram_connected) else "degraded"
         return {
@@ -466,14 +588,28 @@ def create_app() -> FastAPI:
             f"📥 API запрос на отправку сообщения: "
             f"contact_id={request.contact_id}"
         )
-        
+
+        account_id = request.account_id
+        if not account_id:
+            result = await db.execute(
+                select(ChatMapping).filter_by(amocrm_contact_id=request.contact_id)
+            )
+            mapping = result.scalars().first()
+            if mapping:
+                account_id = mapping.account_id
+        if not account_id:
+            account_id = await bridge.telegram.select_account_id()
+        if not account_id:
+            raise HTTPException(status_code=503, detail="No active Telegram accounts")
+
         key = idempotency_key
         if not key:
             payload_hash = json.dumps({
                 "contact_id": request.contact_id,
                 "phone": request.phone,
                 "username": request.username,
-                "message": request.message
+                "message": request.message,
+                "account_id": account_id
             }, sort_keys=True)
             key = build_idempotency_key(payload_hash)
 
@@ -482,11 +618,14 @@ def create_app() -> FastAPI:
             "contact_id": request.contact_id,
             "phone": request.phone,
             "username": request.username,
-            "message": request.message
+            "message": request.message,
+            "account_id": account_id
         }
         outbox, created = await enqueue_outbox(
             db,
             key,
+            account_id,
+            None,
             0,
             payload
         )
@@ -516,7 +655,8 @@ def create_app() -> FastAPI:
             request.contact_id,
             request.phone,
             request.username,
-            request.message
+            request.message,
+            account_id=account_id
         )
 
         await mark_outbox_result(db, outbox, success, None if success else message)
@@ -586,14 +726,18 @@ def create_app() -> FastAPI:
                 for task_data in body['tasks']['add']:
                     task_id = task_data.get('id')
                     if task_id:
+                        account_id = await bridge.telegram.get_default_account_id()
                         key = f"amocrm_task:{task_id}"
                         payload = {
                             "source": "amocrm_webhook",
-                            "task_id": task_id
+                            "task_id": task_id,
+                            "account_id": account_id
                         }
                         outbox, created = await enqueue_outbox(
                             db,
                             key,
+                            account_id or 0,
+                            None,
                             0,
                             payload
                         )
@@ -673,23 +817,36 @@ def create_app() -> FastAPI:
         if not bridge or not bridge.telegram:
             raise HTTPException(status_code=503, detail="Telegram not initialized")
 
-        telegram = bridge.telegram
-        authorized = await telegram.is_authorized()
-        user = None
-        if authorized and telegram.me:
-            user = {
-                "id": telegram.me.id,
-                "username": telegram.me.username,
-                "phone": telegram.me.phone,
-            }
+        statuses = await bridge.telegram.get_status()
+        default_id = await bridge.telegram.get_default_account_id()
+        default_status = None
+        if statuses:
+            default_status = next(
+                (item for item in statuses if item.get("account_id") == default_id),
+                statuses[0]
+            )
+
+        if not default_status:
+            raise HTTPException(status_code=503, detail="No Telegram accounts")
 
         return {
-            "connected": telegram.client.is_connected(),
-            "authorized": authorized,
-            "user": user,
-            "session": telegram.get_session_info(),
-            "anti_spam": telegram.anti_spam.get_stats()
+            "connected": default_status.get("connected"),
+            "authorized": default_status.get("authorized"),
+            "user": default_status.get("user"),
+            "session": default_status.get("session"),
+            "anti_spam": default_status.get("anti_spam"),
+            "accounts": statuses,
+            "default_account_id": default_id
         }
+
+    @app.get("/api/ui/accounts", tags=["UI"])
+    async def ui_accounts(ui_user: dict = Depends(require_ui_auth)):
+        """Список Telegram аккаунтов"""
+        if not bridge or not bridge.telegram:
+            raise HTTPException(status_code=503, detail="Telegram not initialized")
+        statuses = await bridge.telegram.get_status()
+        default_id = await bridge.telegram.get_default_account_id()
+        return {"accounts": statuses, "default_account_id": default_id}
 
     @app.get("/api/ui/events", tags=["UI"])
     async def ui_events(
@@ -715,14 +872,304 @@ def create_app() -> FastAPI:
         ]
         return {"events": events}
 
+    @app.get("/api/admin/summary", tags=["Admin"])
+    async def admin_summary(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Сводка по системе для admin UI"""
+        total_accounts = (await db.execute(
+            select(func.count()).select_from(TelegramAccount)
+        )).scalar() or 0
+        active_accounts = (await db.execute(
+            select(func.count())
+            .select_from(TelegramAccount)
+            .where(TelegramAccount.is_active.is_(True))
+        )).scalar() or 0
+        operator_count = (await db.execute(
+            select(func.count()).select_from(Operator)
+        )).scalar() or 0
+
+        outbox_counts = {"queued": 0, "failed": 0, "dead": 0, "processing": 0, "sent": 0}
+        result = await db.execute(
+            select(MessageOutbox.status, func.count()).group_by(MessageOutbox.status)
+        )
+        for status, count in result.all():
+            outbox_counts[status] = count
+
+        last_event = None
+        event_result = await db.execute(
+            select(UiEventLog).order_by(UiEventLog.created_at.desc()).limit(1)
+        )
+        last_event_row = event_result.scalars().first()
+        if last_event_row:
+            last_event = {
+                "message": last_event_row.message,
+                "level": last_event_row.level,
+                "created_at": last_event_row.created_at.isoformat() + "Z"
+            }
+
+        connected_count = 0
+        authorized_count = 0
+        if bridge and bridge.telegram:
+            statuses = await bridge.telegram.get_status()
+            connected_count = sum(1 for item in statuses if item.get("connected"))
+            authorized_count = sum(1 for item in statuses if item.get("authorized"))
+
+        return {
+            "accounts": {
+                "total": total_accounts,
+                "active": active_accounts,
+                "connected": connected_count,
+                "authorized": authorized_count,
+            },
+            "operators": {"total": operator_count},
+            "outbox": outbox_counts,
+            "last_event": last_event,
+        }
+
+    @app.get("/api/admin/accounts", tags=["Admin"])
+    async def admin_accounts(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Список Telegram аккаунтов для admin UI"""
+        if bridge and bridge.telegram:
+            statuses = await bridge.telegram.get_status()
+            return {"accounts": statuses}
+
+        result = await db.execute(
+            select(TelegramAccount).order_by(TelegramAccount.id.asc())
+        )
+        accounts = result.scalars().all()
+        items = []
+        for account in accounts:
+            items.append(
+                {
+                    "account_id": account.id,
+                    "phone_number": account.phone_number,
+                    "label": account.label or account.phone_number,
+                    "is_active": account.is_active,
+                    "connected": False,
+                    "authorized": False,
+                    "user": None,
+                    "session": {},
+                    "anti_spam": {},
+                }
+            )
+        return {"accounts": items}
+
+    @app.patch("/api/admin/accounts/{account_id}", tags=["Admin"])
+    async def admin_update_account(
+        account_id: int,
+        request: AdminAccountUpdateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Обновление Telegram аккаунта"""
+        result = await db.execute(
+            select(TelegramAccount).filter_by(id=account_id)
+        )
+        account = result.scalars().first()
+        if not account:
+            raise HTTPException(status_code=404, detail="account_not_found")
+
+        if request.label is not None:
+            account.label = request.label.strip() or None
+        if request.is_active is not None:
+            account.is_active = bool(request.is_active)
+
+        await db.commit()
+        await db.refresh(account)
+
+        if bridge and bridge.telegram:
+            await bridge.telegram.refresh_accounts(active_only=False)
+            if request.is_active is False:
+                await bridge.telegram.stop_client(account_id)
+            if request.is_active is True and settings.OUTBOX_PROCESS_INLINE:
+                try:
+                    await bridge.telegram.get_client(account_id)
+                except Exception as exc:
+                    logger.warning("⚠️ Не удалось запустить аккаунт %s: %s", account_id, exc)
+
+            statuses = await bridge.telegram.get_status()
+            match = next(
+                (item for item in statuses if item.get("account_id") == account_id),
+                None
+            )
+            if match:
+                return {"success": True, "account": match}
+
+        return {
+            "success": True,
+            "account": {
+                "account_id": account.id,
+                "phone_number": account.phone_number,
+                "label": account.label or account.phone_number,
+                "is_active": account.is_active,
+                "connected": False,
+                "authorized": False,
+                "user": None,
+                "session": {},
+                "anti_spam": {},
+            }
+        }
+
+    @app.get("/api/admin/settings", tags=["Admin"])
+    async def admin_settings(ui_user: dict = Depends(require_admin)):
+        """Текущие admin-настройки"""
+        try:
+            overrides = await refresh_settings_from_db()
+        except Exception as exc:
+            logger.warning("⚠️ Не удалось загрузить admin-настройки: %s", exc)
+            overrides = {}
+        return get_settings_payload(overrides)
+
+    @app.patch("/api/admin/settings", tags=["Admin"])
+    async def admin_update_settings(
+        request: AdminSettingsUpdateRequest,
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Обновление admin-настроек"""
+        updated, errors = await update_settings_overrides(request.values)
+        if errors:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "errors": errors}
+            )
+
+        anti_spam_keys = {
+            "MAX_MESSAGES_PER_HOUR",
+            "MAX_NEW_CHATS_PER_DAY",
+            "MIN_DELAY_BETWEEN_MESSAGES",
+        }
+        if updated and bridge and bridge.telegram and anti_spam_keys.intersection(updated.keys()):
+            bridge.telegram.apply_antispam_limits(
+                settings.MAX_MESSAGES_PER_HOUR,
+                settings.MAX_NEW_CHATS_PER_DAY,
+                settings.MIN_DELAY_BETWEEN_MESSAGES
+            )
+
+        restart_keys = [
+            key for key in updated.keys()
+            if ALLOWED_SETTINGS.get(key, {}).get("requires_restart")
+        ]
+        return {
+            "success": True,
+            "updated": updated,
+            "requires_restart": bool(restart_keys),
+            "restart_keys": restart_keys,
+        }
+
+    @app.get("/api/ui/operators", tags=["UI"])
+    async def ui_operators(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_ui_auth)
+    ):
+        """Список операторов и их лимитов"""
+        result = await db.execute(
+            select(Operator).order_by(Operator.username.asc())
+        )
+        operators = result.scalars().all()
+
+        now = datetime.utcnow()
+        hour_ago = now - timedelta(hours=1)
+        day_ago = now - timedelta(days=1)
+
+        hour_counts = {}
+        day_counts = {}
+
+        hour_result = await db.execute(
+            select(MessageOutbox.operator_id, func.count())
+            .where(
+                MessageOutbox.operator_id.is_not(None),
+                MessageOutbox.created_at >= hour_ago
+            )
+            .group_by(MessageOutbox.operator_id)
+        )
+        for operator_id, count in hour_result.all():
+            hour_counts[operator_id] = count
+
+        day_result = await db.execute(
+            select(MessageOutbox.operator_id, func.count())
+            .where(
+                MessageOutbox.operator_id.is_not(None),
+                MessageOutbox.created_at >= day_ago
+            )
+            .group_by(MessageOutbox.operator_id)
+        )
+        for operator_id, count in day_result.all():
+            day_counts[operator_id] = count
+
+        items = []
+        for operator in operators:
+            items.append({
+                "id": operator.id,
+                "username": operator.username,
+                "display_name": operator.display_name or operator.username,
+                "email": operator.email or "",
+                "hourly_limit": operator.hourly_limit,
+                "daily_limit": operator.daily_limit,
+                "sent_last_hour": hour_counts.get(operator.id, 0),
+                "sent_last_day": day_counts.get(operator.id, 0),
+                "created_at": operator.created_at.isoformat() + "Z" if operator.created_at else None
+            })
+
+        return {"operators": items}
+
+    @app.patch("/api/ui/operators/{operator_id}", tags=["UI"])
+    async def ui_update_operator(
+        operator_id: int,
+        request: OperatorUpdateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_ui_auth)
+    ):
+        """Обновление лимитов оператора"""
+        if ui_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="admin_only")
+
+        result = await db.execute(
+            select(Operator).filter_by(id=operator_id)
+        )
+        operator = result.scalars().first()
+        if not operator:
+            raise HTTPException(status_code=404, detail="operator_not_found")
+
+        if request.display_name is not None:
+            operator.display_name = request.display_name.strip() or None
+        if request.email is not None:
+            operator.email = request.email.strip() or None
+        if request.hourly_limit is not None:
+            operator.hourly_limit = max(int(request.hourly_limit), 1)
+        if request.daily_limit is not None:
+            operator.daily_limit = max(int(request.daily_limit), 1)
+
+        await db.commit()
+        await db.refresh(operator)
+
+        return {
+            "success": True,
+            "operator": {
+                "id": operator.id,
+                "username": operator.username,
+                "display_name": operator.display_name or operator.username,
+                "email": operator.email or "",
+                "hourly_limit": operator.hourly_limit,
+                "daily_limit": operator.daily_limit,
+            }
+        }
+
     @app.get("/api/ui/stream", tags=["UI"])
     async def ui_stream(
         request: Request,
         last_message_id: int = 0,
         last_event_id: int = 0,
+        account_id: Optional[int] = None,
         ui_user: dict = Depends(require_ui_auth)
     ):
         """SSE поток для новых сообщений и событий"""
+        resolved_account_id = await resolve_account_id(account_id)
+
         async def event_generator():
             nonlocal last_message_id, last_event_id
             last_message_updated_at = datetime.min
@@ -734,16 +1181,16 @@ def create_app() -> FastAPI:
                 events = []
                 async with SessionLocal() as session:
                     if last_message_id is not None:
-                        result = await session.execute(
-                            select(UiMessageHistory)
-                            .where(
-                                or_(
-                                    UiMessageHistory.id > last_message_id,
-                                    UiMessageHistory.updated_at > last_message_updated_at
-                                )
+                        stmt = select(UiMessageHistory).where(
+                            or_(
+                                UiMessageHistory.id > last_message_id,
+                                UiMessageHistory.updated_at > last_message_updated_at
                             )
-                            .order_by(UiMessageHistory.id.asc())
-                            .limit(100)
+                        )
+                        if resolved_account_id:
+                            stmt = stmt.where(UiMessageHistory.account_id == resolved_account_id)
+                        result = await session.execute(
+                            stmt.order_by(UiMessageHistory.id.asc()).limit(100)
                         )
                         messages = result.scalars().all()
                     if last_event_id is not None:
@@ -761,6 +1208,7 @@ def create_app() -> FastAPI:
                         last_message_updated_at = row.updated_at
                     payload = {
                         "id": row.id,
+                        "account_id": row.account_id,
                         "chat_id": row.chat_id,
                         "direction": row.direction,
                         "status": row.status,
@@ -793,43 +1241,50 @@ def create_app() -> FastAPI:
         return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
     @app.get("/api/ui/chats", tags=["UI"])
-    async def ui_chats(limit: int = 80, ui_user: dict = Depends(require_ui_auth)):
+    async def ui_chats(
+        limit: int = 80,
+        account_id: Optional[int] = None,
+        ui_user: dict = Depends(require_ui_auth)
+    ):
         """Список чатов для UI"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        chats = await bridge.telegram.get_chats(limit=limit)
-        return {"chats": chats}
+        _, client = await get_client_for_account(account_id)
+        chats = await client.get_chats(limit=limit)
+        return {"chats": chats, "account_id": client.account_id}
 
     @app.post("/api/ui/chats/{chat_id}/read", tags=["UI"])
-    async def ui_mark_chat_read(chat_id: int, ui_user: dict = Depends(require_ui_auth)):
+    async def ui_mark_chat_read(
+        chat_id: int,
+        account_id: Optional[int] = None,
+        ui_user: dict = Depends(require_ui_auth)
+    ):
         """Сброс непрочитанного счетчика"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        await bridge.telegram.mark_chat_read(chat_id)
+        _, client = await get_client_for_account(account_id)
+        await client.mark_chat_read(chat_id)
         await log_ui_event("info", "chat_mark_read", {"chat_id": chat_id})
         return {"success": True}
 
     @app.get("/api/ui/chat/{chat_id}", tags=["UI"])
     async def ui_chat_details(
         chat_id: int,
+        account_id: Optional[int] = None,
         db: AsyncSession = Depends(get_db),
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Детали чата, профиль и статистика"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
+        resolved_id, client = await get_client_for_account(account_id)
 
-        details = await bridge.telegram.get_chat_details(chat_id)
-        history = await bridge.telegram.get_chat_history_stats(chat_id)
-        recent_messages = await bridge.telegram.get_recent_messages(
+        details = await client.get_chat_details(chat_id)
+        history = await client.get_chat_history_stats(chat_id)
+        recent_messages = await client.get_recent_messages(
             limit=20,
             chat_id=chat_id
         )
 
         result = await db.execute(
-            select(ChatProfile).filter_by(telegram_chat_id=chat_id)
+            select(ChatProfile).filter_by(
+                telegram_chat_id=chat_id,
+                account_id=resolved_id
+            )
         )
         profile = result.scalars().first()
         profile_data = {
@@ -853,19 +1308,24 @@ def create_app() -> FastAPI:
     async def ui_update_chat_profile(
         chat_id: int,
         request: UiChatProfileUpdate,
+        account_id: Optional[int] = None,
         db: AsyncSession = Depends(get_db),
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Сохранение тегов и заметок"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
+        resolved_id, _ = await get_client_for_account(account_id)
         result = await db.execute(
-            select(ChatProfile).filter_by(telegram_chat_id=chat_id)
+            select(ChatProfile).filter_by(
+                telegram_chat_id=chat_id,
+                account_id=resolved_id
+            )
         )
         profile = result.scalars().first()
         if not profile:
-            profile = ChatProfile(telegram_chat_id=chat_id)
+            profile = ChatProfile(
+                telegram_chat_id=chat_id,
+                account_id=resolved_id
+            )
             db.add(profile)
 
         if request.tags is not None:
@@ -903,10 +1363,8 @@ def create_app() -> FastAPI:
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Запрос кода авторизации"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        success, status = await bridge.telegram.request_code(request.phone)
+        _, client = await get_client_for_account(request.account_id)
+        success, status = await client.request_code(request.phone)
         message = humanize_auth_status(status)
         await log_ui_event(
             "info" if success else "error",
@@ -921,10 +1379,8 @@ def create_app() -> FastAPI:
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Подтверждение кода авторизации"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        success, status = await bridge.telegram.submit_code(
+        _, client = await get_client_for_account(request.account_id)
+        success, status = await client.submit_code(
             request.code,
             request.phone
         )
@@ -942,10 +1398,8 @@ def create_app() -> FastAPI:
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Подтверждение 2FA"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        success, status = await bridge.telegram.submit_password(request.password)
+        _, client = await get_client_for_account(request.account_id)
+        success, status = await client.submit_password(request.password)
         message = humanize_auth_status(status)
         await log_ui_event(
             "info" if success else "error",
@@ -955,12 +1409,13 @@ def create_app() -> FastAPI:
         return {"success": success, "status": status, "message": message}
 
     @app.post("/api/ui/auth/logout", tags=["UI"])
-    async def ui_logout(ui_user: dict = Depends(require_ui_auth)):
+    async def ui_logout(
+        account_id: Optional[int] = None,
+        ui_user: dict = Depends(require_ui_auth)
+    ):
         """Выход из Telegram"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
-
-        success, status = await bridge.telegram.logout()
+        _, client = await get_client_for_account(account_id)
+        success, status = await client.logout()
         message = "Сессия очищена" if success else "Ошибка выхода"
         await log_ui_event(
             "info" if success else "error",
@@ -980,8 +1435,8 @@ def create_app() -> FastAPI:
         ui_user: dict = Depends(require_ui_auth)
     ):
         """Отправка сообщения из локального UI"""
-        if not bridge or not bridge.telegram:
-            raise HTTPException(status_code=503, detail="Telegram not initialized")
+        resolved_id, client = await get_client_for_account(request.account_id)
+        operator_id = await resolve_operator_id(db, ui_user)
 
         text = request.message.strip()
         if not text:
@@ -996,11 +1451,11 @@ def create_app() -> FastAPI:
 
         user = None
         if request.chat_id:
-            user = await bridge.telegram.find_user_by_id(request.chat_id)
+            user = await client.find_user_by_id(request.chat_id)
         if not user and request.username:
-            user = await bridge.telegram.find_user_by_username(request.username)
+            user = await client.find_user_by_username(request.username)
         if not user and request.phone:
-            user = await bridge.telegram.find_user_by_phone(request.phone)
+            user = await client.find_user_by_phone(request.phone)
 
         if not user:
             return ui_error_response(
@@ -1018,11 +1473,15 @@ def create_app() -> FastAPI:
             "chat_id": user.id,
             "username": user.username,
             "phone": request.phone,
-            "message": text
+            "message": text,
+            "account_id": resolved_id,
+            "operator_id": operator_id
         }
         outbox, created = await enqueue_outbox(
             db,
             idempotency_key,
+            resolved_id,
+            operator_id,
             user.id,
             payload
         )
@@ -1033,9 +1492,10 @@ def create_app() -> FastAPI:
                 "status": outbox.status,
                 "outbox_id": outbox.id,
                 "chat": {
+                    "account_id": resolved_id,
                     "chat_id": user.id,
                     "username": user.username or "",
-                    "display_name": bridge.telegram._format_chat_name(
+                    "display_name": client._format_chat_name(
                         user.username,
                         user.first_name,
                         user.last_name,
@@ -1046,12 +1506,13 @@ def create_app() -> FastAPI:
 
         if not settings.OUTBOX_PROCESS_INLINE:
             queued_entry = UiMessageHistory(
+                account_id=resolved_id,
                 chat_id=user.id,
                 direction="outbound",
                 message_text=text,
                 message_type="text",
                 username=user.username or "",
-                display_name=bridge.telegram._format_chat_name(
+                display_name=client._format_chat_name(
                     user.username,
                     user.first_name,
                     user.last_name,
@@ -1067,9 +1528,10 @@ def create_app() -> FastAPI:
                 "status": outbox.status,
                 "outbox_id": outbox.id,
                 "chat": {
+                    "account_id": resolved_id,
                     "chat_id": user.id,
                     "username": user.username or "",
-                    "display_name": bridge.telegram._format_chat_name(
+                    "display_name": client._format_chat_name(
                         user.username,
                         user.first_name,
                         user.last_name,
@@ -1078,7 +1540,11 @@ def create_app() -> FastAPI:
                 }
             }
 
-        success, status_message = await bridge.telegram.send_message_to_user(user, text)
+        success, status_message = await client.send_message_to_user(
+            user,
+            text,
+            operator_id=operator_id
+        )
         await mark_outbox_result(db, outbox, success, None if success else status_message)
 
         if not success:
@@ -1100,7 +1566,7 @@ def create_app() -> FastAPI:
 
         chat = None
         try:
-            chats = await bridge.telegram.get_chats(limit=200)
+            chats = await client.get_chats(limit=200)
             chat = next(
                 (item for item in chats if item.get("chat_id") == user.id),
                 None
@@ -1109,13 +1575,14 @@ def create_app() -> FastAPI:
             chat = None
 
         if not chat:
-            display_name = bridge.telegram._format_chat_name(
+            display_name = client._format_chat_name(
                 user.username,
                 user.first_name,
                 user.last_name,
                 user.id
             )
             chat = {
+                "account_id": resolved_id,
                 "chat_id": user.id,
                 "username": user.username or "",
                 "display_name": display_name
@@ -1139,11 +1606,13 @@ def create_app() -> FastAPI:
     async def ui_messages(
         limit: int = 50,
         chat_id: Optional[int] = None,
+        account_id: Optional[int] = None,
         ui_user: dict = Depends(require_ui_auth),
         db: AsyncSession = Depends(get_db)
     ):
         """Получение последних сообщений"""
-        stmt = select(UiMessageHistory)
+        resolved_id = await resolve_account_id(account_id)
+        stmt = select(UiMessageHistory).filter_by(account_id=resolved_id)
         if chat_id is not None:
             stmt = stmt.filter_by(chat_id=chat_id)
         stmt = stmt.order_by(UiMessageHistory.created_at.desc()).limit(limit)
@@ -1155,6 +1624,7 @@ def create_app() -> FastAPI:
             timestamp = row.created_at.isoformat() + "Z" if row.created_at else None
             messages.append({
                 "id": row.id,
+                "account_id": row.account_id,
                 "direction": row.direction,
                 "chat_id": row.chat_id,
                 "username": row.username or "",

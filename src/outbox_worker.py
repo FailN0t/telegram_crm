@@ -14,8 +14,9 @@ from sqlalchemy import select
 from src.config import settings
 from src.logger import logger
 from src.database import init_db, SessionLocal, UiMessageHistory
+from src.app_settings import refresh_settings_from_db
 from src.observability import init_error_tracking
-from src.telegram_client import MTProtoClient
+from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
 from src.bridge import AmoCRMTelegramBridge
 from src.outbox import (
@@ -46,7 +47,7 @@ def is_retryable_error(error_message: Optional[str]) -> bool:
 
 class OutboxWorker:
     def __init__(self) -> None:
-        self.telegram: Optional[MTProtoClient] = None
+        self.telegram_manager: Optional[TelegramClientManager] = None
         self.amocrm: Optional[AmoCRMClient] = None
         self.bridge: Optional[AmoCRMTelegramBridge] = None
         self.stop_event = asyncio.Event()
@@ -66,11 +67,16 @@ class OutboxWorker:
         if not chat_id or not message_text:
             return
 
+        query = select(UiMessageHistory).filter_by(
+            chat_id=chat_id,
+            message_text=message_text,
+            status="queued"
+        )
+        account_id = payload.get("account_id")
+        if account_id:
+            query = query.filter_by(account_id=account_id)
         result = await db.execute(
-            select(UiMessageHistory)
-            .filter_by(chat_id=chat_id, message_text=message_text, status="queued")
-            .order_by(UiMessageHistory.created_at.desc())
-            .limit(1)
+            query.order_by(UiMessageHistory.created_at.desc()).limit(1)
         )
         entry = result.scalars().first()
         if not entry:
@@ -85,6 +91,10 @@ class OutboxWorker:
         logger.info("📦 Инициализация outbox worker...")
         init_error_tracking()
         await init_db()
+        try:
+            await refresh_settings_from_db()
+        except Exception as exc:
+            logger.warning("⚠️ Не удалось применить admin-настройки: %s", exc)
 
         if (
             settings.AMOCRM_DOMAIN
@@ -98,23 +108,27 @@ class OutboxWorker:
             self.amocrm = None
             logger.warning("⚠️ AmoCRM отключен: нет обязательных настроек")
 
-        self.telegram = MTProtoClient()
-        await self.telegram.start()
+        self.telegram_manager = TelegramClientManager()
+        await self.telegram_manager.start_all()
 
-        self.bridge = AmoCRMTelegramBridge(self.telegram, self.amocrm)
+        self.bridge = AmoCRMTelegramBridge(self.telegram_manager, self.amocrm)
         logger.info("✅ Outbox worker готов")
 
     async def stop(self) -> None:
         if self.stop_event.is_set():
             return
         self.stop_event.set()
-        if self.telegram:
-            await self.telegram.stop()
+        if self.telegram_manager:
+            await self.telegram_manager.stop_all()
         logger.info("🛑 Outbox worker остановлен")
 
     async def process_payload(self, db, payload: dict) -> Tuple[bool, str]:
-        if not self.bridge or not self.telegram:
+        if not self.bridge or not self.telegram_manager:
             return False, "bridge_not_initialized"
+
+        account_id = payload.get("account_id")
+        if not account_id:
+            account_id = await self.telegram_manager.get_default_account_id()
 
         source = payload.get("source")
         if source == "api":
@@ -126,7 +140,8 @@ class OutboxWorker:
                 contact_id,
                 payload.get("phone"),
                 payload.get("username"),
-                payload.get("message", "")
+                payload.get("message", ""),
+                account_id=account_id
             )
 
         if source == "amocrm_webhook":
@@ -140,17 +155,24 @@ class OutboxWorker:
             return await self.bridge.handle_amocrm_task(db, task_id)
 
         if source == "ui":
+            if not account_id:
+                return False, "account_id is required"
+            client = await self.telegram_manager.get_client(account_id)
             target_user = None
             chat_id = payload.get("chat_id")
             if chat_id:
-                target_user = await self.telegram.find_user_by_id(chat_id)
+                target_user = await client.find_user_by_id(chat_id)
             if not target_user and payload.get("username"):
-                target_user = await self.telegram.find_user_by_username(payload.get("username"))
+                target_user = await client.find_user_by_username(payload.get("username"))
             if not target_user and payload.get("phone"):
-                target_user = await self.telegram.find_user_by_phone(payload.get("phone"))
+                target_user = await client.find_user_by_phone(payload.get("phone"))
             if not target_user:
                 return False, "user_not_found"
-            return await self.telegram.send_message_to_user(target_user, payload.get("message", ""))
+            return await client.send_message_to_user(
+                target_user,
+                payload.get("message", ""),
+                operator_id=payload.get("operator_id")
+            )
 
         return False, "unknown_source"
 
@@ -173,7 +195,10 @@ class OutboxWorker:
                         outbox.attempts
                     )
 
-                    success, message = await self.process_payload(session, outbox.payload)
+                    payload = dict(outbox.payload or {})
+                    if outbox.account_id and "account_id" not in payload:
+                        payload["account_id"] = outbox.account_id
+                    success, message = await self.process_payload(session, payload)
                     if success:
                         await mark_outbox_result(session, outbox, True, None)
                         await self.update_ui_history_status(

@@ -60,6 +60,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=12345,
                     amocrm_contact_id=999,
                     telegram_username="test_user"
@@ -70,6 +71,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create message history linked to chat
                 message = MessageHistory(
+                    account_id=1,
                     chat_mapping_id=chat.id,
                     amocrm_contact_id=999,
                     telegram_chat_id=12345,
@@ -110,6 +112,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=67890,
                     amocrm_contact_id=888,
                     telegram_username="profile_user"
@@ -120,6 +123,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat profile linked to chat
                 profile = ChatProfile(
+                    account_id=1,
                     telegram_chat_id=67890,
                     tags="vip,important",
                     notes="Test notes"
@@ -158,6 +162,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=11111,
                     amocrm_contact_id=777,
                     telegram_username="outbox_user"
@@ -168,6 +173,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 # Create outbox message
                 outbox = MessageOutbox(
                     idempotency_key="test-cascade-1",
+                    account_id=1,
                     chat_id=11111,
                     payload={"text": "test"},
                     status="failed"
@@ -224,6 +230,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=22222,
                     amocrm_contact_id=666,
                     telegram_username="cascade_user"
@@ -234,12 +241,14 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 # Create outbox messages
                 outbox1 = MessageOutbox(
                     idempotency_key="cascade-outbox-1",
+                    account_id=1,
                     chat_id=22222,
                     payload={"text": "message 1"},
                     status="queued"
                 )
                 outbox2 = MessageOutbox(
                     idempotency_key="cascade-outbox-2",
+                    account_id=1,
                     chat_id=22222,
                     payload={"text": "message 2"},
                     status="sent"
@@ -278,6 +287,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=33333,
                     amocrm_contact_id=555,
                     telegram_username="ui_user"
@@ -287,6 +297,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create UI message history
                 ui_msg = UiMessageHistory(
+                    account_id=1,
                     chat_id=33333,
                     direction="outbound",
                     message_text="UI test message",
@@ -325,6 +336,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=44444,
                     amocrm_contact_id=444,
                     telegram_username="ui_chat_user"
@@ -334,6 +346,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create UI chat
                 ui_chat = UiChat(
+                    account_id=1,
                     chat_id=44444,
                     username="ui_chat_user",
                     display_name="Test User"
@@ -376,6 +389,7 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create chat mapping
                 chat = ChatMapping(
+                    account_id=1,
                     telegram_chat_id=99999,
                     amocrm_contact_id=999,
                     telegram_username="full_chain_user"
@@ -386,10 +400,12 @@ class ForeignKeyCascadeTests(unittest.TestCase):
 
                 # Create all related records
                 profile = ChatProfile(
+                    account_id=1,
                     telegram_chat_id=99999,
                     tags="test"
                 )
                 message_history = MessageHistory(
+                    account_id=1,
                     chat_mapping_id=chat.id,
                     amocrm_contact_id=999,
                     telegram_chat_id=99999,
@@ -398,16 +414,19 @@ class ForeignKeyCascadeTests(unittest.TestCase):
                 )
                 outbox = MessageOutbox(
                     idempotency_key="full-chain-1",
+                    account_id=1,
                     chat_id=99999,
                     payload={"text": "test"},
                     status="queued"
                 )
                 ui_msg = UiMessageHistory(
+                    account_id=1,
                     chat_id=99999,
                     direction="inbound",
                     message_text="UI Test"
                 )
                 ui_chat = UiChat(
+                    account_id=1,
                     chat_id=99999,
                     username="full_chain_user"
                 )

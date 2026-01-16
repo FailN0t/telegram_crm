@@ -6,7 +6,10 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Tuple, Optional
 
+from sqlalchemy import select
+
 from src.config import settings
+from src.database import SessionLocal, Operator
 from src.logger import logger
 from src.redis_client import get_redis
 
@@ -59,13 +62,16 @@ class AntiSpamManager:
     Предотвращает блокировку аккаунта Telegram
     """
 
-    def __init__(self):
+    def __init__(self, account_id: Optional[int] = None):
+        self.account_id = account_id or 0
         # Счетчики
         self.message_count = 0
         self.hour_start = datetime.now()
         self.daily_new_chats = 0
         self.day_start = datetime.now()
         self.sent_to_today = set()
+        self.operator_hour_counts = {}
+        self.operator_day_counts = {}
 
         # Лимиты из конфигурации
         self.MAX_MESSAGES_PER_HOUR = settings.MAX_MESSAGES_PER_HOUR
@@ -114,16 +120,36 @@ class AntiSpamManager:
                 self.last_message_time = None
 
     def _hour_key(self, now: datetime) -> str:
-        return f"antispam:hour:{now.strftime('%Y%m%d%H')}"
+        return f"antispam:account:{self.account_id}:hour:{now.strftime('%Y%m%d%H')}"
 
     def _day_key(self, now: datetime) -> str:
-        return f"antispam:day:{now.strftime('%Y%m%d')}:new_chats"
+        return f"antispam:account:{self.account_id}:day:{now.strftime('%Y%m%d')}:new_chats"
 
     def _day_users_key(self, now: datetime) -> str:
-        return f"antispam:day:{now.strftime('%Y%m%d')}:users"
+        return f"antispam:account:{self.account_id}:day:{now.strftime('%Y%m%d')}:users"
 
     def _last_message_key(self) -> str:
-        return "antispam:last_message_at"
+        return f"antispam:account:{self.account_id}:last_message_at"
+
+    def _operator_hour_key(self, operator_id: int, now: datetime) -> str:
+        hour_key = now.strftime("%Y%m%d%H")
+        return f"antispam:account:{self.account_id}:operator:{operator_id}:hour:{hour_key}"
+
+    def _operator_day_key(self, operator_id: int, now: datetime) -> str:
+        day_key = now.strftime("%Y%m%d")
+        return f"antispam:account:{self.account_id}:operator:{operator_id}:day:{day_key}"
+
+    async def _get_operator_limits(self, operator_id: int) -> Optional[Tuple[int, int]]:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                select(Operator).filter_by(id=operator_id)
+            )
+            operator = result.scalars().first()
+        if not operator:
+            return None
+        hourly_limit = operator.hourly_limit or self.MAX_MESSAGES_PER_HOUR
+        daily_limit = operator.daily_limit or self.MAX_MESSAGES_PER_HOUR * 4
+        return hourly_limit, daily_limit
 
     async def _ensure_lua_scripts(self, redis) -> None:
         """Загружает Lua скрипты в Redis если они еще не загружены"""
@@ -244,7 +270,12 @@ class AntiSpamManager:
             logger.error(f"Ошибка при выполнении Lua скрипта check_delay: {exc}")
             raise
 
-    async def try_register_send(self, user_id: int, is_new_chat: bool = False) -> Tuple[bool, str]:
+    async def try_register_send(
+        self,
+        user_id: int,
+        is_new_chat: bool = False,
+        operator_id: Optional[int] = None
+    ) -> Tuple[bool, str]:
         """
         Проверяет лимиты и регистрирует отправку одним атомарным шагом
 
@@ -264,16 +295,32 @@ class AntiSpamManager:
 
             redis = await get_redis()
             if redis:
-                return await self._try_register_with_redis(redis, now, user_id, is_new_chat)
+                return await self._try_register_with_redis(
+                    redis,
+                    now,
+                    user_id,
+                    is_new_chat,
+                    operator_id
+                )
 
-            return self._try_register_in_memory(now, user_id, is_new_chat)
+            operator_limits = None
+            if operator_id:
+                operator_limits = await self._get_operator_limits(operator_id)
+            return self._try_register_in_memory(
+                now,
+                user_id,
+                is_new_chat,
+                operator_id,
+                operator_limits
+            )
 
     async def _try_register_with_redis(
         self,
         redis,
         now: datetime,
         user_id: int,
-        is_new_chat: bool
+        is_new_chat: bool,
+        operator_id: Optional[int]
     ) -> Tuple[bool, str]:
         hour_key = self._hour_key(now)
         day_key = self._day_key(now)
@@ -297,6 +344,44 @@ class AntiSpamManager:
             if not delay_ok:
                 return False, f"⏳ Подождите {wait_time:.1f}с перед следующим сообщением"
 
+            operator_hour_key = None
+            operator_day_key = None
+            operator_hour_incremented = False
+            operator_day_incremented = False
+            if operator_id:
+                limits = await self._get_operator_limits(operator_id)
+                if limits:
+                    operator_hour_limit, operator_day_limit = limits
+                    operator_hour_key = self._operator_hour_key(operator_id, now)
+                    operator_day_key = self._operator_day_key(operator_id, now)
+
+                    op_hour_ok, op_hour_count = await self._atomic_check_and_increment(
+                        redis,
+                        operator_hour_key,
+                        operator_hour_limit,
+                        2 * 60 * 60
+                    )
+                    if not op_hour_ok:
+                        return False, (
+                            f"⚠️ Превышен лимит оператора в час "
+                            f"({op_hour_count}/{operator_hour_limit})"
+                        )
+                    operator_hour_incremented = True
+
+                    op_day_ok, op_day_count = await self._atomic_check_and_increment(
+                        redis,
+                        operator_day_key,
+                        operator_day_limit,
+                        2 * 24 * 60 * 60
+                    )
+                    if not op_day_ok:
+                        await redis.decr(operator_hour_key)
+                        return False, (
+                            f"⚠️ Превышен лимит оператора в день "
+                            f"({op_day_count}/{operator_day_limit})"
+                        )
+                    operator_day_incremented = True
+
             # 2. АТОМАРНАЯ проверка и инкремент почасового лимита
             hour_ok, hour_count = await self._atomic_check_and_increment(
                 redis,
@@ -305,6 +390,10 @@ class AntiSpamManager:
                 2 * 60 * 60  # TTL = 2 часа
             )
             if not hour_ok:
+                if operator_hour_incremented and operator_hour_key:
+                    await redis.decr(operator_hour_key)
+                if operator_day_incremented and operator_day_key:
+                    await redis.decr(operator_day_key)
                 return False, (
                     f"⚠️ Превышен лимит сообщений в час "
                     f"({hour_count}/{self.MAX_MESSAGES_PER_HOUR})"
@@ -322,6 +411,10 @@ class AntiSpamManager:
                 if not day_ok:
                     # Откатываем hour_count, так как мы не смогли зарегистрировать отправку
                     await redis.decr(hour_key)
+                    if operator_hour_incremented and operator_hour_key:
+                        await redis.decr(operator_hour_key)
+                    if operator_day_incremented and operator_day_key:
+                        await redis.decr(operator_day_key)
                     return False, (
                         f"⚠️ Превышен лимит новых чатов в день "
                         f"({day_count}/{self.MAX_NEW_CHATS_PER_DAY})"
@@ -346,13 +439,24 @@ class AntiSpamManager:
 
         except Exception as exc:
             logger.warning(f"⚠️ Redis недоступен для anti-spam: {exc}")
-            return self._try_register_in_memory(now, user_id, is_new_chat)
+            operator_limits = None
+            if operator_id:
+                operator_limits = await self._get_operator_limits(operator_id)
+            return self._try_register_in_memory(
+                now,
+                user_id,
+                is_new_chat,
+                operator_id,
+                operator_limits
+            )
 
     def _try_register_in_memory(
         self,
         now: datetime,
         user_id: int,
-        is_new_chat: bool
+        is_new_chat: bool,
+        operator_id: Optional[int] = None,
+        operator_limits: Optional[Tuple[int, int]] = None
     ) -> Tuple[bool, str]:
         if (now - self.hour_start) > timedelta(hours=1):
             logger.info(
@@ -361,6 +465,7 @@ class AntiSpamManager:
             )
             self.message_count = 0
             self.hour_start = now
+            self.operator_hour_counts.clear()
 
         if (now - self.day_start) > timedelta(days=1):
             logger.info(
@@ -370,12 +475,30 @@ class AntiSpamManager:
             self.daily_new_chats = 0
             self.day_start = now
             self.sent_to_today.clear()
+            self.operator_day_counts.clear()
 
         if self.message_count >= self.MAX_MESSAGES_PER_HOUR:
             return False, (
                 f"⚠️ Превышен лимит сообщений в час "
                 f"({self.message_count}/{self.MAX_MESSAGES_PER_HOUR})"
             )
+
+        operator_hour_count = 0
+        operator_day_count = 0
+        if operator_id and operator_limits:
+            operator_hour_limit, operator_day_limit = operator_limits
+            operator_hour_count = self.operator_hour_counts.get(operator_id, 0)
+            if operator_hour_count >= operator_hour_limit:
+                return False, (
+                    f"⚠️ Превышен лимит оператора в час "
+                    f"({operator_hour_count}/{operator_hour_limit})"
+                )
+            operator_day_count = self.operator_day_counts.get(operator_id, 0)
+            if operator_day_count >= operator_day_limit:
+                return False, (
+                    f"⚠️ Превышен лимит оператора в день "
+                    f"({operator_day_count}/{operator_day_limit})"
+                )
 
         if user_id in self.sent_to_today:
             is_new_chat = False
@@ -395,6 +518,9 @@ class AntiSpamManager:
         self.message_count += 1
         self.last_message_time = now
         self.sent_to_today.add(user_id)
+        if operator_id and operator_limits:
+            self.operator_hour_counts[operator_id] = operator_hour_count + 1
+            self.operator_day_counts[operator_id] = operator_day_count + 1
         if is_new_chat:
             self.daily_new_chats += 1
 
@@ -419,3 +545,20 @@ class AntiSpamManager:
             "last_message_at": self.last_message_time.isoformat() if self.last_message_time else None,
             "current_time": now.isoformat(),
         }
+
+    def update_limits(
+        self,
+        max_messages_per_hour: int,
+        max_new_chats_per_day: int,
+        min_delay_between_messages: int
+    ) -> None:
+        """Обновить лимиты без пересоздания менеджера."""
+        self.MAX_MESSAGES_PER_HOUR = max_messages_per_hour
+        self.MAX_NEW_CHATS_PER_DAY = max_new_chats_per_day
+        self.MIN_DELAY_BETWEEN_MESSAGES = min_delay_between_messages
+        logger.info(
+            "🔧 Anti-Spam лимиты обновлены: %s msg/hour, %s new chats/day, %ss delay",
+            self.MAX_MESSAGES_PER_HOUR,
+            self.MAX_NEW_CHATS_PER_DAY,
+            self.MIN_DELAY_BETWEEN_MESSAGES
+        )

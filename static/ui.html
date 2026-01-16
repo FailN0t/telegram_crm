@@ -88,6 +88,9 @@
           </div>
         </div>
         <div class="flex items-center gap-3 ml-4 border-l border-border-light dark:border-border-dark pl-4">
+          <a class="hover:text-primary transition-colors" href="/ui/operators" title="Operators">
+            <span class="material-icons-outlined">manage_accounts</span>
+          </a>
           <a class="hover:text-primary transition-colors" href="/ui/auth" title="Auth">
             <span class="material-icons-outlined">vpn_key</span>
           </a>
@@ -133,23 +136,16 @@
 
     <div class="flex flex-1 overflow-hidden">
       <nav class="w-16 flex flex-col items-center py-4 gap-4 bg-secondary text-white shrink-0 z-30 accounts-bar" id="accounts-panel">
-        <button class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white shadow-lg ring-2 ring-white/20 hover:scale-105 transition-transform" title="Main Account">
-          <span class="font-bold text-sm">TG</span>
-        </button>
-        <div class="w-10 h-10 rounded-xl bg-gray-700 flex items-center justify-center text-gray-300 hover:bg-gray-600 hover:text-white transition-colors cursor-pointer" title="Support Account">
-          <span class="font-bold text-sm">S1</span>
-        </div>
-        <div class="w-10 h-10 rounded-xl bg-gray-700 flex items-center justify-center text-gray-300 hover:bg-gray-600 hover:text-white transition-colors cursor-pointer" title="Sales Account">
-          <span class="font-bold text-sm">S2</span>
-        </div>
+        <div class="flex flex-col items-center gap-3 w-full" id="account-list"></div>
+        <div class="text-[10px] text-gray-400 hidden" id="empty-accounts">No accounts</div>
         <div class="mt-auto flex flex-col gap-4">
-          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors" id="btn-collapse-accounts" class="collapse-handle" title="Collapse">
+          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors collapse-handle" id="btn-collapse-accounts" title="Collapse">
             <span class="material-icons-outlined text-lg">chevron_left</span>
           </button>
-          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors" title="Add account">
+          <button class="w-10 h-10 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-white transition-colors" title="Add account" disabled>
             <span class="material-icons-outlined text-lg">add</span>
           </button>
-          <button class="w-10 h-10 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors" title="Settings">
+          <button class="w-10 h-10 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors" title="Settings" disabled>
             <span class="material-icons-outlined text-lg">settings</span>
           </button>
         </div>
@@ -157,8 +153,6 @@
         <div class="hidden" id="account-phone"></div>
         <div class="hidden" id="account-status"></div>
         <div class="hidden" id="account-limits"></div>
-        <div class="hidden" id="account-list"></div>
-        <div class="hidden" id="empty-accounts"></div>
       </nav>
 
       <aside class="w-80 bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark flex flex-col shrink-0">

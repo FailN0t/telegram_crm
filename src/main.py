@@ -12,8 +12,9 @@ import uvicorn
 from src.config import settings
 from src.logger import logger
 from src.database import init_db
+from src.app_settings import refresh_settings_from_db
 from src.observability import init_error_tracking
-from src.telegram_client import MTProtoClient
+from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
 from src.bridge import AmoCRMTelegramBridge
 from src.api_server import app, set_bridge
@@ -23,11 +24,11 @@ class Application:
     """Главное приложение"""
     
     def __init__(self):
-        self.telegram = None
+        self.telegram_manager = None
         self.amocrm = None
         self.bridge = None
         self.api_server_task = None
-        self.telegram_task = None
+        self.telegram_tasks = []
         self.running = False
         
         logger.info(f"🚀 Инициализация {settings.APP_NAME} v{settings.APP_VERSION}")
@@ -41,6 +42,10 @@ class Application:
             # 1. Инициализация БД
             logger.info("📊 Инициализация базы данных...")
             await init_db()
+            try:
+                await refresh_settings_from_db()
+            except Exception as exc:
+                logger.warning("⚠️ Не удалось применить admin-настройки: %s", exc)
             logger.info("✅ База данных готова")
             
             # 2. Инициализация AmoCRM клиента (опционально)
@@ -65,13 +70,13 @@ class Application:
             if settings.OUTBOX_PROCESS_INLINE:
                 # 3. Инициализация Telegram клиента
                 logger.info("📱 Инициализация Telegram клиента...")
-                self.telegram = MTProtoClient()
-                await self.telegram.start()
-                logger.info("✅ Telegram клиент готов")
+                self.telegram_manager = TelegramClientManager()
+                await self.telegram_manager.start_all()
+                logger.info("✅ Telegram клиенты готовы")
 
                 # 4. Создание Bridge
                 logger.info("🌉 Создание Bridge...")
-                self.bridge = AmoCRMTelegramBridge(self.telegram, self.amocrm)
+                self.bridge = AmoCRMTelegramBridge(self.telegram_manager, self.amocrm)
 
                 # Устанавливаем bridge в API сервере
                 set_bridge(self.bridge)
@@ -82,7 +87,7 @@ class Application:
                     "инициализируется в API сервере. "
                     "Запустите outbox_worker для доставки."
                 )
-                self.telegram = None
+                self.telegram_manager = None
                 self.bridge = None
                 set_bridge(None)
             
@@ -126,8 +131,8 @@ class Application:
             self.api_server_task = asyncio.create_task(self.start_api_server())
             
             # Запускаем Telegram клиент в отдельной задаче
-            if self.telegram:
-                self.telegram_task = asyncio.create_task(self.telegram.run())
+            if self.telegram_manager:
+                self.telegram_tasks = self.telegram_manager.get_run_tasks()
             
             logger.info("✅ Приложение запущено!")
             logger.info("📊 Статистика доступна на: /api/stats")
@@ -136,8 +141,8 @@ class Application:
             
             # Ждем завершения задач
             tasks = [self.api_server_task]
-            if self.telegram_task:
-                tasks.append(self.telegram_task)
+            if self.telegram_tasks:
+                tasks.extend(self.telegram_tasks)
             await asyncio.gather(*tasks, return_exceptions=True)
             
         except Exception as e:
@@ -155,13 +160,14 @@ class Application:
         
         try:
             # Останавливаем Telegram клиент
-            if self.telegram:
-                logger.info("📱 Остановка Telegram клиента...")
-                await self.telegram.stop()
-            
+            if self.telegram_manager:
+                logger.info("📱 Остановка Telegram клиентов...")
+                await self.telegram_manager.stop_all()
+
             # Отменяем задачи
-            if self.telegram_task and not self.telegram_task.done():
-                self.telegram_task.cancel()
+            for task in self.telegram_tasks:
+                if task and not task.done():
+                    task.cancel()
             
             if self.api_server_task and not self.api_server_task.done():
                 self.api_server_task.cancel()

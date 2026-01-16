@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Operators & Limits</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#229ED9",
+              secondary: "#101827",
+              "background-light": "#F3F4F6",
+              "background-dark": "#0B1120",
+              "surface-light": "#FFFFFF",
+              "surface-dark": "#1F2937",
+              "border-light": "#E5E7EB",
+              "border-dark": "#374151",
+            },
+            fontFamily: {
+              display: ["Inter", "sans-serif"],
+              body: ["Inter", "sans-serif"],
+            },
+            borderRadius: {
+              DEFAULT: "0.5rem",
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="/static/styles.min.css?v=20260114" />
+  </head>
+  <body class="bg-background-light dark:bg-background-dark text-gray-800 dark:text-gray-100 min-h-screen flex flex-col font-body transition-colors duration-200">
+    <header class="h-14 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark flex items-center justify-between px-4 shrink-0 z-20">
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="material-icons-outlined text-primary text-2xl">manage_accounts</span>
+          <h1 class="font-bold text-lg tracking-tight">Operators & Limits</h1>
+        </div>
+        <div class="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-2"></div>
+        <div class="flex items-center gap-2 text-sm">
+          <div class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+          </div>
+          <span class="text-green-600 dark:text-green-400 font-medium">System Online</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 text-gray-500 dark:text-gray-400">
+        <a class="hover:text-primary transition-colors" href="/ui" title="Console">
+          <span class="material-icons-outlined">dashboard</span>
+        </a>
+        <a class="hover:text-primary transition-colors" href="/ui/auth" title="Auth">
+          <span class="material-icons-outlined">vpn_key</span>
+        </a>
+        <button class="hover:text-primary transition-colors" id="btn-theme" title="Toggle Theme">
+          <span class="material-icons-outlined">dark_mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="flex-1 overflow-auto">
+      <div class="max-w-6xl mx-auto px-6 py-6">
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Overview</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
+              Operators are created from UI Basic Auth usernames after the first send.
+              Update limits to prevent a single operator from flooding the account.
+            </p>
+            <div class="mt-4 text-sm text-gray-600 dark:text-gray-300" id="operators-summary">
+              Operators: --
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <button class="btn primary" id="btn-refresh">Refresh</button>
+              <span class="result" id="operators-status"></span>
+            </div>
+            <div class="mt-4 text-xs text-gray-500 dark:text-gray-400">
+              Limit changes require admin role.
+            </div>
+          </section>
+
+          <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5 xl:col-span-2">
+            <div class="flex items-center justify-between">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Operators</h2>
+              <div class="text-xs text-gray-500 dark:text-gray-400" id="operators-updated">Updated: --</div>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="text-xs uppercase text-gray-500 dark:text-gray-400 border-b border-border-light dark:border-border-dark">
+                  <tr>
+                    <th class="text-left py-2 px-3">Operator</th>
+                    <th class="text-left py-2 px-3">Display name</th>
+                    <th class="text-left py-2 px-3">Email</th>
+                    <th class="text-left py-2 px-3">Hourly limit</th>
+                    <th class="text-left py-2 px-3">Daily limit</th>
+                    <th class="text-left py-2 px-3">Sent (1h/24h)</th>
+                    <th class="text-left py-2 px-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="operators-table-body"></tbody>
+              </table>
+            </div>
+            <div class="empty-state mt-4" id="operators-empty">
+              No operators yet. Send a message from UI to create one.
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <script src="/static/operators.min.js?v=20260116"></script>
+  </body>
+</html>

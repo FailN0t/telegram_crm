@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#229ED9",
+              secondary: "#101827",
+              "background-light": "#F3F4F6",
+              "background-dark": "#0B1120",
+              "surface-light": "#FFFFFF",
+              "surface-dark": "#1F2937",
+              "border-light": "#E5E7EB",
+              "border-dark": "#374151",
+            },
+            fontFamily: {
+              display: ["Inter", "sans-serif"],
+              body: ["Inter", "sans-serif"],
+            },
+            borderRadius: {
+              DEFAULT: "0.5rem",
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="/static/styles.min.css?v=20260116" />
+  </head>
+  <body class="bg-background-light dark:bg-background-dark text-gray-800 dark:text-gray-100 min-h-screen flex flex-col font-body transition-colors duration-200" data-page="dashboard">
+    <header class="h-14 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark flex items-center justify-between px-4 shrink-0 z-20">
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="material-icons-outlined text-primary text-2xl">admin_panel_settings</span>
+          <h1 class="font-bold text-lg tracking-tight">Admin Dashboard</h1>
+        </div>
+        <div class="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-2"></div>
+        <nav class="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+          <a class="hover:text-primary" href="/admin">Overview</a>
+          <a class="hover:text-primary" href="/admin/accounts">Accounts</a>
+          <a class="hover:text-primary" href="/admin/settings">Settings</a>
+        </nav>
+      </div>
+      <div class="flex items-center gap-3 text-gray-500 dark:text-gray-400">
+        <a class="hover:text-primary transition-colors" href="/ui" title="Console">
+          <span class="material-icons-outlined">dashboard</span>
+        </a>
+        <a class="hover:text-primary transition-colors" href="/ui/operators" title="Operators">
+          <span class="material-icons-outlined">manage_accounts</span>
+        </a>
+        <button class="hover:text-primary transition-colors" id="btn-theme" title="Toggle Theme">
+          <span class="material-icons-outlined">dark_mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="flex-1 overflow-auto">
+      <div class="max-w-6xl mx-auto px-6 py-6 space-y-4">
+        <section class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">System summary</h2>
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Ключевые метрики и состояние компонентов.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button class="btn primary" id="btn-refresh">Refresh</button>
+              <span class="result" id="summary-status"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+            <div class="text-xs uppercase text-gray-400">Accounts</div>
+            <div class="text-2xl font-semibold mt-2" id="summary-accounts-total">--</div>
+            <div class="text-xs text-gray-500 mt-2">Active: <span id="summary-accounts-active">--</span></div>
+            <div class="text-xs text-gray-500">Connected: <span id="summary-accounts-connected">--</span></div>
+            <div class="text-xs text-gray-500">Authorized: <span id="summary-accounts-authorized">--</span></div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+            <div class="text-xs uppercase text-gray-400">Operators</div>
+            <div class="text-2xl font-semibold mt-2" id="summary-operators-total">--</div>
+            <div class="text-xs text-gray-500 mt-2">Перейти на <a class="text-primary" href="/ui/operators">/ui/operators</a></div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+            <div class="text-xs uppercase text-gray-400">Outbox</div>
+            <div class="text-xs text-gray-500 mt-2">Queued: <span id="summary-outbox-queued">--</span></div>
+            <div class="text-xs text-gray-500">Failed: <span id="summary-outbox-failed">--</span></div>
+            <div class="text-xs text-gray-500">Dead: <span id="summary-outbox-dead">--</span></div>
+            <div class="text-xs text-gray-500">Processing: <span id="summary-outbox-processing">--</span></div>
+            <div class="text-xs text-gray-500">Sent: <span id="summary-outbox-sent">--</span></div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 border border-border-light dark:border-border-dark rounded-xl p-5">
+            <div class="text-xs uppercase text-gray-400">Last event</div>
+            <div class="text-sm font-semibold mt-2" id="summary-last-event">--</div>
+            <div class="text-xs text-gray-500 mt-2" id="summary-last-event-time">--</div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="/static/admin.min.js?v=20260116"></script>
+  </body>
+</html>

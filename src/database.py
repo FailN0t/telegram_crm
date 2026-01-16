@@ -5,12 +5,13 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, BigInteger, Boolean, DateTime,
-    Text, Index, JSON, ForeignKey, text
+    Text, Index, JSON, ForeignKey, text, select
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from src.config import settings
+from src.logger import logger
 
 # Базовый класс для моделей
 Base = declarative_base()
@@ -52,6 +53,14 @@ class ChatMapping(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     
+    # Account binding
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
     # Telegram данные
     telegram_chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
     telegram_username = Column(String(255), index=True)
@@ -74,11 +83,70 @@ class ChatMapping(Base):
     
     # Индексы
     __table_args__ = (
+        Index('idx_chat_mappings_account_id', 'account_id'),
         Index('idx_chat_mappings_telegram_chat_id', 'telegram_chat_id'),
         Index('idx_chat_mappings_amocrm_contact_id', 'amocrm_contact_id'),
         Index('idx_chat_mappings_phone_number', 'phone_number'),
         Index('idx_chat_mappings_telegram_username', 'telegram_username'),
         Index('idx_chat_mappings_active', 'is_active'),
+    )
+
+
+class TelegramAccount(Base):
+    """Telegram account metadata for multi-account support"""
+
+    __tablename__ = "telegram_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(32), unique=True, nullable=False, index=True)
+    session_string = Column(Text)
+    label = Column(String(128))
+    is_active = Column(Boolean, default=True, index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_telegram_accounts_phone', 'phone_number'),
+        Index('idx_telegram_accounts_active', 'is_active'),
+    )
+
+
+class Operator(Base):
+    """UI operator limits and metadata"""
+
+    __tablename__ = "operators"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    display_name = Column(String(128))
+    email = Column(String(100), unique=True, index=True)
+    hourly_limit = Column(Integer, default=50)
+    daily_limit = Column(Integer, default=200)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_operators_username', 'username'),
+        Index('idx_operators_email', 'email'),
+    )
+
+
+class AppSetting(Base):
+    """Admin-configurable application settings"""
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(JSON, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_app_settings_key", "key"),
+        Index("idx_app_settings_updated_at", "updated_at"),
     )
 
 
@@ -88,6 +156,12 @@ class ChatProfile(Base):
     __tablename__ = "chat_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     telegram_chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
     tags = Column(String(255), default="")
     notes = Column(Text, default="")
@@ -101,6 +175,7 @@ class ChatProfile(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
+        Index('idx_chat_profiles_account_id', 'account_id'),
         Index('idx_chat_profiles_telegram_chat_id', 'telegram_chat_id'),
     )
 
@@ -112,6 +187,18 @@ class MessageOutbox(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     idempotency_key = Column(String(128), unique=True, nullable=False, index=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    operator_id = Column(
+        Integer,
+        ForeignKey("operators.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
     chat_id = Column(BigInteger, nullable=False, index=True)
     payload = Column(JSON, nullable=False)
     status = Column(String(32), default="queued", index=True)
@@ -123,6 +210,8 @@ class MessageOutbox(Base):
 
     __table_args__ = (
         Index('idx_message_outbox_idempotency_key', 'idempotency_key'),
+        Index('idx_message_outbox_account_id', 'account_id'),
+        Index('idx_message_outbox_operator_id', 'operator_id'),
         Index('idx_message_outbox_chat_id', 'chat_id'),
         Index('idx_message_outbox_status', 'status'),
     )
@@ -189,6 +278,12 @@ class MessageHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     
     # Связи
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     chat_mapping_id = Column(
         Integer,
         ForeignKey("chat_mappings.id", ondelete="CASCADE"),
@@ -221,6 +316,7 @@ class MessageHistory(Base):
     
     # Индексы
     __table_args__ = (
+        Index('idx_message_history_account_id', 'account_id'),
         Index('idx_message_history_chat_mapping_id', 'chat_mapping_id'),
         Index('idx_message_history_amocrm_contact_id', 'amocrm_contact_id'),
         Index('idx_message_history_telegram_chat_id', 'telegram_chat_id'),
@@ -235,6 +331,12 @@ class UiMessageHistory(Base):
     __tablename__ = "ui_message_history"
 
     id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     chat_id = Column(BigInteger, nullable=False, index=True)
     direction = Column(String(10), nullable=False)
     message_text = Column(Text)
@@ -251,6 +353,7 @@ class UiMessageHistory(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
     __table_args__ = (
+        Index('idx_ui_message_history_account_id', 'account_id'),
         Index('idx_ui_message_history_chat_id', 'chat_id'),
         Index('idx_ui_message_history_direction', 'direction'),
         Index('idx_ui_message_history_status', 'status'),
@@ -283,6 +386,12 @@ class UiChat(Base):
     __tablename__ = "ui_chats"
 
     id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("telegram_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
     chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
     username = Column(String(255), default="")
     display_name = Column(String(255), default="")
@@ -299,6 +408,7 @@ class UiChat(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
+        Index('idx_ui_chats_account_id', 'account_id'),
         Index('idx_ui_chats_chat_id', 'chat_id'),
         Index('idx_ui_chats_last_timestamp', 'last_timestamp'),
         Index('idx_ui_chats_unread', 'unread_count'),
@@ -341,6 +451,42 @@ async def init_db():
             await conn.run_sync(Base.metadata.create_all)
         else:
             await conn.execute(text("SELECT 1"))
+    try:
+        await ensure_default_account()
+    except Exception as exc:
+        logger.warning(f"⚠️ Не удалось создать default аккаунт: {exc}")
+
+
+async def ensure_default_account() -> Optional[int]:
+    """Ensure a default Telegram account exists and return its id."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(TelegramAccount).order_by(TelegramAccount.id.asc()).limit(1)
+        )
+        existing = result.scalars().first()
+        if existing:
+            return existing.id
+
+        phone = settings.TELEGRAM_PHONE or "default"
+        session_string = settings.TELEGRAM_STRING_SESSION
+        if not session_string:
+            result = await session.execute(
+                select(TelegramSession).filter_by(phone=phone)
+            )
+            record = result.scalars().first()
+            if record:
+                session_string = record.session_string
+
+        account = TelegramAccount(
+            phone_number=phone,
+            session_string=session_string,
+            label=phone,
+            is_active=True
+        )
+        session.add(account)
+        await session.commit()
+        await session.refresh(account)
+        return account.id
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
