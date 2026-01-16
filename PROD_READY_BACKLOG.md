@@ -295,7 +295,7 @@ UI (/ui) ─▶ API (FastAPI) ─▶ Outbox (Postgres) ─▶ Queue (Redis)
 - [x] Мульти-аккаунты MTProto
 - [x] Timezone в quiet-hours
 - [x] Лимиты per operator
-- [x] Admin UI (/admin, /admin/accounts, /admin/settings)
+- [x] Admin UI (/admin, /admin/accounts, /admin/settings, templates/tags)
 
 ---
 

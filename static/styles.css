@@ -216,6 +216,20 @@ body {
   border-color: #374151;
 }
 
+.tag-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dark .tag-btn {
+  background: #1f2937;
+  border-color: #374151;
+}
+
 .result {
   font-size: 12px;
   margin-top: 6px;
@@ -406,4 +420,3 @@ body.accounts-collapsed .accounts-bar .collapse-handle {
   flex-direction: column !important;
   gap: 12px !important;
 }
-

@@ -53,6 +53,7 @@
       const contactId = document.getElementById("contact-id");
       const contactPhone = document.getElementById("contact-phone");
       const contactTags = document.getElementById("contact-tags");
+      const tagSuggestions = document.getElementById("tag-suggestions");
       const contactNotes = document.getElementById("contact-notes");
       const contactConsent = document.getElementById("contact-consent");
       const contactOptout = document.getElementById("contact-optout");
@@ -693,6 +694,91 @@
         });
       }
 
+      function splitTags(value) {
+        return (value || "")
+          .split(",")
+          .map(item => item.trim())
+          .filter(Boolean);
+      }
+
+      function addTagToInput(tagName) {
+        if (!contactTags) return;
+        const tags = splitTags(contactTags.value);
+        if (!tags.includes(tagName)) {
+          tags.push(tagName);
+        }
+        contactTags.value = tags.join(", ");
+      }
+
+      function renderTagSuggestions(tags) {
+        if (!tagSuggestions) return;
+        tagSuggestions.innerHTML = "";
+        if (!tags.length) {
+          tagSuggestions.style.display = "none";
+          return;
+        }
+        tagSuggestions.style.display = "flex";
+        tags.forEach(tag => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "tag-btn";
+          button.textContent = tag.name;
+          if (tag.color) {
+            button.style.borderColor = tag.color;
+            button.style.color = tag.color;
+          }
+          button.addEventListener("click", () => addTagToInput(tag.name));
+          tagSuggestions.appendChild(button);
+        });
+      }
+
+      async function loadTagSuggestions() {
+        if (!tagSuggestions) return;
+        try {
+          const res = await fetch("/api/ui/tags");
+          const data = await res.json();
+          renderTagSuggestions(data.tags || []);
+        } catch (err) {
+          tagSuggestions.style.display = "none";
+        }
+      }
+
+      function renderTemplateButtons(templates) {
+        templateList.innerHTML = "";
+        if (!templates.length) {
+          const empty = document.createElement("div");
+          empty.className = "notice";
+          empty.textContent = "Шаблонов пока нет.";
+          templateList.appendChild(empty);
+          return;
+        }
+        templates.forEach(item => {
+          const button = document.createElement("button");
+          button.className = "template-btn";
+          button.textContent = item.label;
+          button.addEventListener("click", () => {
+            const target = state.activeChatId
+              ? document.getElementById("message-text")
+              : document.getElementById("new-message");
+            if (!target) return;
+            target.value = item.body || "";
+            target.focus();
+          });
+          templateList.appendChild(button);
+        });
+      }
+
+      async function loadTemplates() {
+        if (!templateList) return;
+        try {
+          const res = await fetch("/api/ui/templates");
+          const data = await res.json();
+          renderTemplateButtons(data.templates || []);
+        } catch (err) {
+          renderTemplateButtons([]);
+        }
+      }
+
       let stream = null;
       let statusTimer = null;
       let fallbackTimer = null;
@@ -745,25 +831,6 @@
           scheduleFallbackPolling();
         };
       }
-
-      const templates = [
-        { label: "Приветствие", text: "Привет! Спасибо за сообщение. Чем помочь?" },
-        { label: "Уточнение", text: "Подскажите, пожалуйста, детали: ..." },
-        { label: "В работе", text: "Принял в работу. Вернусь с ответом в ближайшее время." },
-        { label: "Завершение", text: "Спасибо! Если появятся вопросы — пишите." }
-      ];
-
-      templates.forEach(item => {
-        const button = document.createElement("button");
-        button.className = "template-btn";
-        button.textContent = item.label;
-        button.addEventListener("click", () => {
-          const target = state.activeChatId ? document.getElementById("message-text") : document.getElementById("new-message");
-          target.value = item.text;
-          target.focus();
-        });
-        templateList.appendChild(button);
-      });
 
       document.getElementById("btn-refresh").addEventListener("click", () => {
         refreshStatus();
@@ -914,5 +981,7 @@
       loadChats();
       loadMessages();
       loadEvents();
+      loadTemplates();
+      loadTagSuggestions();
       scheduleStatusRefresh();
       startStream();

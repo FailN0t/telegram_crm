@@ -150,6 +150,45 @@ class AppSetting(Base):
     )
 
 
+class MessageTemplate(Base):
+    """Шаблоны быстрых ответов для UI"""
+
+    __tablename__ = "message_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    label = Column(String(120), nullable=False)
+    body = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_message_templates_label", "label"),
+        Index("idx_message_templates_active", "is_active"),
+    )
+
+
+class TagCatalog(Base):
+    """Справочник тегов для UI"""
+
+    __tablename__ = "tag_catalog"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), nullable=False, unique=True)
+    description = Column(String(255), default="")
+    color = Column(String(16), default="")
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_tag_catalog_name", "name"),
+        Index("idx_tag_catalog_active", "is_active"),
+    )
+
+
 class ChatProfile(Base):
     """Локальный профиль чата (теги, заметки)"""
 

@@ -462,6 +462,334 @@ async function loadSettings() {
   }
 }
 
+function buildTemplateRow(template, onSave, onDelete) {
+  const row = document.createElement("div");
+  row.className = "grid grid-cols-1 md:grid-cols-6 gap-3 p-3 border border-border-light dark:border-border-dark rounded-lg";
+
+  const labelWrap = document.createElement("div");
+  labelWrap.className = "md:col-span-2";
+  const labelInput = document.createElement("input");
+  labelInput.className = "w-full bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 text-xs";
+  labelInput.value = template.label || "";
+  labelWrap.appendChild(labelInput);
+
+  const bodyWrap = document.createElement("div");
+  bodyWrap.className = "md:col-span-3";
+  const bodyInput = document.createElement("textarea");
+  bodyInput.className = "w-full bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 text-xs";
+  bodyInput.rows = 2;
+  bodyInput.value = template.body || "";
+  bodyWrap.appendChild(bodyInput);
+
+  const actionWrap = document.createElement("div");
+  actionWrap.className = "flex flex-col gap-2";
+  const activeLabel = document.createElement("label");
+  activeLabel.className = "flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400";
+  const activeInput = document.createElement("input");
+  activeInput.type = "checkbox";
+  activeInput.checked = Boolean(template.is_active);
+  activeLabel.appendChild(activeInput);
+  activeLabel.appendChild(document.createTextNode("Active"));
+
+  const buttonRow = document.createElement("div");
+  buttonRow.className = "flex items-center gap-2";
+  const saveButton = document.createElement("button");
+  saveButton.className = "btn";
+  saveButton.textContent = "Save";
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "btn";
+  deleteButton.textContent = "Delete";
+  buttonRow.appendChild(saveButton);
+  buttonRow.appendChild(deleteButton);
+
+  const rowStatus = document.createElement("span");
+  rowStatus.className = "result";
+
+  actionWrap.appendChild(activeLabel);
+  actionWrap.appendChild(buttonRow);
+  actionWrap.appendChild(rowStatus);
+
+  row.appendChild(labelWrap);
+  row.appendChild(bodyWrap);
+  row.appendChild(actionWrap);
+
+  saveButton.addEventListener("click", async () => {
+    rowStatus.className = "result";
+    rowStatus.textContent = "Saving...";
+    try {
+      await onSave(template.id, {
+        label: labelInput.value,
+        body: bodyInput.value,
+        is_active: activeInput.checked
+      });
+      rowStatus.className = "result ok";
+      rowStatus.textContent = "Saved";
+    } catch (err) {
+      rowStatus.className = "result err";
+      rowStatus.textContent = err.message || "Save failed";
+    }
+  });
+
+  deleteButton.addEventListener("click", async () => {
+    if (!confirm("Delete template?")) return;
+    rowStatus.className = "result";
+    rowStatus.textContent = "Deleting...";
+    try {
+      await onDelete(template.id);
+      rowStatus.className = "result ok";
+      rowStatus.textContent = "Deleted";
+    } catch (err) {
+      rowStatus.className = "result err";
+      rowStatus.textContent = err.message || "Delete failed";
+    }
+  });
+
+  return row;
+}
+
+async function loadTemplates() {
+  const statusEl = document.getElementById("templates-status");
+  const listEl = document.getElementById("templates-list");
+  const emptyEl = document.getElementById("templates-empty");
+  if (!listEl) return;
+
+  setStatus(statusEl, null, "Loading...");
+  try {
+    const data = await fetchJson("/api/admin/templates");
+    const templates = data.templates || [];
+    listEl.innerHTML = "";
+    if (!templates.length) {
+      emptyEl.style.display = "block";
+    } else {
+      emptyEl.style.display = "none";
+      templates.forEach(item => {
+        const row = buildTemplateRow(
+          item,
+          async (id, payload) => {
+            await fetchJson(`/api/admin/templates/${id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            await loadTemplates();
+          },
+          async (id) => {
+            await fetchJson(`/api/admin/templates/${id}`, { method: "DELETE" });
+            await loadTemplates();
+          }
+        );
+        listEl.appendChild(row);
+      });
+    }
+    setStatus(statusEl, true, "Updated");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
+async function createTemplate() {
+  const statusEl = document.getElementById("templates-status");
+  const labelInput = document.getElementById("template-label");
+  const bodyInput = document.getElementById("template-body");
+  const activeInput = document.getElementById("template-active");
+  if (!labelInput || !bodyInput || !activeInput) return;
+
+  const label = labelInput.value.trim();
+  const body = bodyInput.value.trim();
+  if (!label || !body) {
+    setStatus(statusEl, false, "Label and text required");
+    return;
+  }
+  setStatus(statusEl, null, "Saving...");
+  try {
+    await fetchJson("/api/admin/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label,
+        body,
+        is_active: activeInput.checked
+      })
+    });
+    labelInput.value = "";
+    bodyInput.value = "";
+    activeInput.checked = true;
+    await loadTemplates();
+    setStatus(statusEl, true, "Created");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
+function buildTagRow(tag, onSave, onDelete) {
+  const row = document.createElement("div");
+  row.className = "grid grid-cols-1 md:grid-cols-6 gap-3 p-3 border border-border-light dark:border-border-dark rounded-lg";
+
+  const nameWrap = document.createElement("div");
+  nameWrap.className = "md:col-span-2";
+  const nameInput = document.createElement("input");
+  nameInput.className = "w-full bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 text-xs";
+  nameInput.value = tag.name || "";
+  nameWrap.appendChild(nameInput);
+
+  const descWrap = document.createElement("div");
+  descWrap.className = "md:col-span-2";
+  const descInput = document.createElement("input");
+  descInput.className = "w-full bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 text-xs";
+  descInput.value = tag.description || "";
+  descWrap.appendChild(descInput);
+
+  const colorWrap = document.createElement("div");
+  colorWrap.className = "md:col-span-1";
+  const colorInput = document.createElement("input");
+  colorInput.className = "w-full bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 text-xs";
+  colorInput.value = tag.color || "";
+  colorWrap.appendChild(colorInput);
+
+  const actionWrap = document.createElement("div");
+  actionWrap.className = "flex flex-col gap-2";
+  const activeLabel = document.createElement("label");
+  activeLabel.className = "flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400";
+  const activeInput = document.createElement("input");
+  activeInput.type = "checkbox";
+  activeInput.checked = Boolean(tag.is_active);
+  activeLabel.appendChild(activeInput);
+  activeLabel.appendChild(document.createTextNode("Active"));
+
+  const buttonRow = document.createElement("div");
+  buttonRow.className = "flex items-center gap-2";
+  const saveButton = document.createElement("button");
+  saveButton.className = "btn";
+  saveButton.textContent = "Save";
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "btn";
+  deleteButton.textContent = "Delete";
+  buttonRow.appendChild(saveButton);
+  buttonRow.appendChild(deleteButton);
+
+  const rowStatus = document.createElement("span");
+  rowStatus.className = "result";
+
+  actionWrap.appendChild(activeLabel);
+  actionWrap.appendChild(buttonRow);
+  actionWrap.appendChild(rowStatus);
+
+  row.appendChild(nameWrap);
+  row.appendChild(descWrap);
+  row.appendChild(colorWrap);
+  row.appendChild(actionWrap);
+
+  saveButton.addEventListener("click", async () => {
+    rowStatus.className = "result";
+    rowStatus.textContent = "Saving...";
+    try {
+      await onSave(tag.id, {
+        name: nameInput.value,
+        description: descInput.value,
+        color: colorInput.value,
+        is_active: activeInput.checked
+      });
+      rowStatus.className = "result ok";
+      rowStatus.textContent = "Saved";
+    } catch (err) {
+      rowStatus.className = "result err";
+      rowStatus.textContent = err.message || "Save failed";
+    }
+  });
+
+  deleteButton.addEventListener("click", async () => {
+    if (!confirm("Delete tag?")) return;
+    rowStatus.className = "result";
+    rowStatus.textContent = "Deleting...";
+    try {
+      await onDelete(tag.id);
+      rowStatus.className = "result ok";
+      rowStatus.textContent = "Deleted";
+    } catch (err) {
+      rowStatus.className = "result err";
+      rowStatus.textContent = err.message || "Delete failed";
+    }
+  });
+
+  return row;
+}
+
+async function loadTags() {
+  const statusEl = document.getElementById("tags-status");
+  const listEl = document.getElementById("tags-list");
+  const emptyEl = document.getElementById("tags-empty");
+  if (!listEl) return;
+
+  setStatus(statusEl, null, "Loading...");
+  try {
+    const data = await fetchJson("/api/admin/tags");
+    const tags = data.tags || [];
+    listEl.innerHTML = "";
+    if (!tags.length) {
+      emptyEl.style.display = "block";
+    } else {
+      emptyEl.style.display = "none";
+      tags.forEach(item => {
+        const row = buildTagRow(
+          item,
+          async (id, payload) => {
+            await fetchJson(`/api/admin/tags/${id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            await loadTags();
+          },
+          async (id) => {
+            await fetchJson(`/api/admin/tags/${id}`, { method: "DELETE" });
+            await loadTags();
+          }
+        );
+        listEl.appendChild(row);
+      });
+    }
+    setStatus(statusEl, true, "Updated");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
+async function createTag() {
+  const statusEl = document.getElementById("tags-status");
+  const nameInput = document.getElementById("tag-name");
+  const descInput = document.getElementById("tag-description");
+  const colorInput = document.getElementById("tag-color");
+  const activeInput = document.getElementById("tag-active");
+  if (!nameInput || !descInput || !colorInput || !activeInput) return;
+
+  const name = nameInput.value.trim();
+  if (!name) {
+    setStatus(statusEl, false, "Name required");
+    return;
+  }
+  setStatus(statusEl, null, "Saving...");
+  try {
+    await fetchJson("/api/admin/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        description: descInput.value.trim(),
+        color: colorInput.value.trim(),
+        is_active: activeInput.checked
+      })
+    });
+    nameInput.value = "";
+    descInput.value = "";
+    colorInput.value = "";
+    activeInput.checked = true;
+    await loadTags();
+    setStatus(statusEl, true, "Created");
+  } catch (err) {
+    setStatus(statusEl, false, err.message || "Failed");
+  }
+}
+
 async function loadAmoCRMStatus() {
   const statusEl = document.getElementById("amocrm-status");
   const domainEl = document.getElementById("amocrm-domain");
@@ -533,9 +861,19 @@ if (page === "accounts") {
 if (page === "settings") {
   loadSettings();
   loadAmoCRMStatus();
+  loadTemplates();
+  loadTags();
   const connectBtn = document.getElementById("btn-amocrm-connect");
   if (connectBtn) {
     connectBtn.addEventListener("click", connectAmoCRM);
+  }
+  const templateBtn = document.getElementById("btn-template-create");
+  if (templateBtn) {
+    templateBtn.addEventListener("click", createTemplate);
+  }
+  const tagBtn = document.getElementById("btn-tag-create");
+  if (tagBtn) {
+    tagBtn.addEventListener("click", createTag);
   }
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get("amocrm") === "success") {

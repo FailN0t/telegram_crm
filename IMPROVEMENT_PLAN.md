@@ -839,6 +839,7 @@ async def check_operator_limits(operator_id: int, account_id: int):
 - Управление AmoCRM интеграцией (OAuth)
 - Настройка лимитов AntiSpam
 - Управление аккаунтами Telegram
+- Управление шаблонами сообщений и тегами
 - Просмотр логов и метрик
 
 #### Шаги реализации
@@ -848,7 +849,7 @@ async def check_operator_limits(operator_id: int, account_id: int):
 - [x] `/admin/` — дашборд
 - [x] `/admin/accounts` — Telegram аккаунты
 - [x] `/admin/settings` — настройки
-- [ ] `/admin/logs` — логи
+- [x] `/admin/logs` — логи
 
 **2. Управление настройками (1 день)**
 - [x] Создать таблицу `app_settings`:
@@ -861,6 +862,7 @@ CREATE TABLE app_settings (
 ```
 
 - [x] API для чтения/записи настроек
+- [x] UI для шаблонов быстрых ответов и каталога тегов
 
 **3. Аутентификация Admin UI (1 день)**
 - [x] Добавить базовую аутентификацию (логин/пароль)

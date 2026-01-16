@@ -35,6 +35,8 @@ from src.database import (
     UiEventLog,
     AuditLog,
     AppSetting,
+    MessageTemplate,
+    TagCatalog,
     SessionLocal
 )
 from src.app_settings import (
@@ -172,6 +174,36 @@ class AdminAccountUpdateRequest(BaseModel):
 class AdminSettingsUpdateRequest(BaseModel):
     """Обновление admin-настроек"""
     values: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminTemplateCreateRequest(BaseModel):
+    """Создание шаблона сообщений"""
+    label: str
+    body: str
+    is_active: bool = True
+
+
+class AdminTemplateUpdateRequest(BaseModel):
+    """Обновление шаблона сообщений"""
+    label: Optional[str] = None
+    body: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AdminTagCreateRequest(BaseModel):
+    """Создание тега"""
+    name: str
+    description: Optional[str] = ""
+    color: Optional[str] = ""
+    is_active: bool = True
+
+
+class AdminTagUpdateRequest(BaseModel):
+    """Обновление тега"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 # Глобальные переменные (будут инициализированы в main)
@@ -385,6 +417,29 @@ def tail_log_lines(log_path: Path, limit: int) -> list[str]:
         for line in handle:
             lines.append(line.rstrip("\n"))
     return list(lines)
+
+
+def serialize_template(template: MessageTemplate) -> dict:
+    return {
+        "id": template.id,
+        "label": template.label,
+        "body": template.body,
+        "is_active": template.is_active,
+        "created_at": template.created_at.isoformat() + "Z" if template.created_at else None,
+        "updated_at": template.updated_at.isoformat() + "Z" if template.updated_at else None,
+    }
+
+
+def serialize_tag(tag: TagCatalog) -> dict:
+    return {
+        "id": tag.id,
+        "name": tag.name,
+        "description": tag.description,
+        "color": tag.color,
+        "is_active": tag.is_active,
+        "created_at": tag.created_at.isoformat() + "Z" if tag.created_at else None,
+        "updated_at": tag.updated_at.isoformat() + "Z" if tag.updated_at else None,
+    }
 
 
 def humanize_auth_status(status: str) -> str:
@@ -947,6 +1002,34 @@ def create_app() -> FastAPI:
         ]
         return {"events": events}
 
+    @app.get("/api/ui/templates", tags=["UI"])
+    async def ui_templates(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_ui_auth)
+    ):
+        """Активные шаблоны быстрых ответов."""
+        result = await db.execute(
+            select(MessageTemplate)
+            .where(MessageTemplate.is_active.is_(True))
+            .order_by(MessageTemplate.label.asc())
+        )
+        templates = result.scalars().all()
+        return {"templates": [serialize_template(item) for item in templates]}
+
+    @app.get("/api/ui/tags", tags=["UI"])
+    async def ui_tags(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_ui_auth)
+    ):
+        """Активные теги для подсказок."""
+        result = await db.execute(
+            select(TagCatalog)
+            .where(TagCatalog.is_active.is_(True))
+            .order_by(TagCatalog.name.asc())
+        )
+        tags = result.scalars().all()
+        return {"tags": [serialize_tag(item) for item in tags]}
+
     @app.get("/api/admin/summary", tags=["Admin"])
     async def admin_summary(
         db: AsyncSession = Depends(get_db),
@@ -1227,6 +1310,238 @@ def create_app() -> FastAPI:
         if not success:
             return RedirectResponse(url="/admin/settings?amocrm=error")
         return RedirectResponse(url="/admin/settings?amocrm=success")
+
+    @app.get("/api/admin/templates", tags=["Admin"])
+    async def admin_templates(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Список шаблонов сообщений."""
+        result = await db.execute(
+            select(MessageTemplate).order_by(MessageTemplate.label.asc())
+        )
+        templates = result.scalars().all()
+        return {"templates": [serialize_template(item) for item in templates]}
+
+    @app.post("/api/admin/templates", tags=["Admin"])
+    async def admin_create_template(
+        request: AdminTemplateCreateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Создать шаблон сообщений."""
+        label = request.label.strip()
+        body = request.body.strip()
+        if not label:
+            raise HTTPException(status_code=400, detail="label_required")
+        if not body:
+            raise HTTPException(status_code=400, detail="body_required")
+
+        template = MessageTemplate(
+            label=label,
+            body=body,
+            is_active=bool(request.is_active)
+        )
+        db.add(template)
+        await db.commit()
+        await db.refresh(template)
+
+        await log_audit_event(
+            "template_create",
+            ui_user,
+            data={"label": template.label},
+            entity_type="message_template",
+            entity_id=str(template.id)
+        )
+
+        return {"template": serialize_template(template)}
+
+    @app.patch("/api/admin/templates/{template_id}", tags=["Admin"])
+    async def admin_update_template(
+        template_id: int,
+        request: AdminTemplateUpdateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Обновить шаблон сообщений."""
+        template = await db.get(MessageTemplate, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="template_not_found")
+
+        updated_fields = {}
+        if request.label is not None:
+            label = request.label.strip()
+            if not label:
+                raise HTTPException(status_code=400, detail="label_required")
+            template.label = label
+            updated_fields["label"] = label
+        if request.body is not None:
+            body = request.body.strip()
+            if not body:
+                raise HTTPException(status_code=400, detail="body_required")
+            template.body = body
+            updated_fields["body"] = body
+        if request.is_active is not None:
+            template.is_active = bool(request.is_active)
+            updated_fields["is_active"] = template.is_active
+
+        await db.commit()
+        await db.refresh(template)
+
+        await log_audit_event(
+            "template_update",
+            ui_user,
+            data={"updated": updated_fields},
+            entity_type="message_template",
+            entity_id=str(template.id)
+        )
+
+        return {"template": serialize_template(template)}
+
+    @app.delete("/api/admin/templates/{template_id}", tags=["Admin"])
+    async def admin_delete_template(
+        template_id: int,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Удалить шаблон сообщений."""
+        template = await db.get(MessageTemplate, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="template_not_found")
+
+        await db.delete(template)
+        await db.commit()
+
+        await log_audit_event(
+            "template_delete",
+            ui_user,
+            data={"label": template.label},
+            entity_type="message_template",
+            entity_id=str(template.id)
+        )
+
+        return {"success": True}
+
+    @app.get("/api/admin/tags", tags=["Admin"])
+    async def admin_tags(
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Список тегов."""
+        result = await db.execute(
+            select(TagCatalog).order_by(TagCatalog.name.asc())
+        )
+        tags = result.scalars().all()
+        return {"tags": [serialize_tag(item) for item in tags]}
+
+    @app.post("/api/admin/tags", tags=["Admin"])
+    async def admin_create_tag(
+        request: AdminTagCreateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Создать тег."""
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name_required")
+
+        existing = await db.execute(
+            select(TagCatalog).where(TagCatalog.name == name)
+        )
+        if existing.scalars().first():
+            raise HTTPException(status_code=409, detail="tag_exists")
+
+        tag = TagCatalog(
+            name=name,
+            description=(request.description or "").strip(),
+            color=(request.color or "").strip(),
+            is_active=bool(request.is_active)
+        )
+        db.add(tag)
+        await db.commit()
+        await db.refresh(tag)
+
+        await log_audit_event(
+            "tag_create",
+            ui_user,
+            data={"name": tag.name},
+            entity_type="tag",
+            entity_id=str(tag.id)
+        )
+
+        return {"tag": serialize_tag(tag)}
+
+    @app.patch("/api/admin/tags/{tag_id}", tags=["Admin"])
+    async def admin_update_tag(
+        tag_id: int,
+        request: AdminTagUpdateRequest,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Обновить тег."""
+        tag = await db.get(TagCatalog, tag_id)
+        if not tag:
+            raise HTTPException(status_code=404, detail="tag_not_found")
+
+        updated_fields = {}
+        if request.name is not None:
+            name = request.name.strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="name_required")
+            if name != tag.name:
+                existing = await db.execute(
+                    select(TagCatalog).where(TagCatalog.name == name)
+                )
+                if existing.scalars().first():
+                    raise HTTPException(status_code=409, detail="tag_exists")
+            tag.name = name
+            updated_fields["name"] = name
+        if request.description is not None:
+            tag.description = request.description.strip()
+            updated_fields["description"] = tag.description
+        if request.color is not None:
+            tag.color = request.color.strip()
+            updated_fields["color"] = tag.color
+        if request.is_active is not None:
+            tag.is_active = bool(request.is_active)
+            updated_fields["is_active"] = tag.is_active
+
+        await db.commit()
+        await db.refresh(tag)
+
+        await log_audit_event(
+            "tag_update",
+            ui_user,
+            data={"updated": updated_fields},
+            entity_type="tag",
+            entity_id=str(tag.id)
+        )
+
+        return {"tag": serialize_tag(tag)}
+
+    @app.delete("/api/admin/tags/{tag_id}", tags=["Admin"])
+    async def admin_delete_tag(
+        tag_id: int,
+        db: AsyncSession = Depends(get_db),
+        ui_user: dict = Depends(require_admin)
+    ):
+        """Удалить тег."""
+        tag = await db.get(TagCatalog, tag_id)
+        if not tag:
+            raise HTTPException(status_code=404, detail="tag_not_found")
+
+        await db.delete(tag)
+        await db.commit()
+
+        await log_audit_event(
+            "tag_delete",
+            ui_user,
+            data={"name": tag.name},
+            entity_type="tag",
+            entity_id=str(tag.id)
+        )
+
+        return {"success": True}
 
     @app.get("/api/admin/logs", tags=["Admin"])
     async def admin_logs(

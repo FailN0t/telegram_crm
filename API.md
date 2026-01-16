@@ -201,6 +201,49 @@ SSE‑поток событий.
 ### `GET /api/admin/amocrm/oauth/callback`
 OAuth callback, обменивает `code` на токены и перенаправляет обратно в `/admin/settings`.
 
+### `GET /api/admin/templates`
+Список шаблонов быстрых ответов (admin).
+
+### `POST /api/admin/templates`
+Создание шаблона.
+
+**Body**
+```json
+{
+  "label": "Приветствие",
+  "body": "Привет! Спасибо за сообщение. Чем помочь?",
+  "is_active": true
+}
+```
+
+### `PATCH /api/admin/templates/{template_id}`
+Обновление шаблона (label/body/is_active).
+
+### `DELETE /api/admin/templates/{template_id}`
+Удаление шаблона.
+
+### `GET /api/admin/tags`
+Список тегов (admin).
+
+### `POST /api/admin/tags`
+Создание тега.
+
+**Body**
+```json
+{
+  "name": "vip",
+  "description": "Ключевой клиент",
+  "color": "#229ED9",
+  "is_active": true
+}
+```
+
+### `PATCH /api/admin/tags/{tag_id}`
+Обновление тега (name/description/color/is_active).
+
+### `DELETE /api/admin/tags/{tag_id}`
+Удаление тега.
+
 ### `GET /api/admin/logs`
 Tail логов приложения.
 
@@ -216,6 +259,12 @@ Audit log admin‑действий.
 - `limit` — максимум записей (1–200)
 - `actor` — фильтр по пользователю
 - `action` — фильтр по действию
+
+### `GET /api/ui/templates`
+Список активных шаблонов для UI.
+
+### `GET /api/ui/tags`
+Список активных тегов для UI.
 
 ### `GET /api/ui/chats`
 Список чатов (для UI).
