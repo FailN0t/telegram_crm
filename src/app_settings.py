@@ -109,6 +109,21 @@ ALLOWED_SETTINGS: Dict[str, Dict[str, Any]] = {
         "description": "AmoCRM token expiry timestamp (ISO8601).",
         "requires_restart": False,
     },
+    "BITRIX24_ACCESS_TOKEN": {
+        "type": str,
+        "description": "Bitrix24 access token (OAuth).",
+        "requires_restart": False,
+    },
+    "BITRIX24_REFRESH_TOKEN": {
+        "type": str,
+        "description": "Bitrix24 refresh token (OAuth).",
+        "requires_restart": False,
+    },
+    "BITRIX24_TOKEN_EXPIRES_AT": {
+        "type": str,
+        "description": "Bitrix24 token expiry timestamp (ISO8601).",
+        "requires_restart": False,
+    },
 }
 
 BASELINE_VALUES = {key: getattr(settings, key) for key in ALLOWED_SETTINGS.keys()}
