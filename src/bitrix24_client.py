@@ -769,8 +769,8 @@ class Bitrix24Client:
             "NAME": name,
             "ICON": {
                 "DATA_IMAGE": icon_url or default_icon
-            },
-            "PLACEMENT_HANDLER": ""  # URL для обработки UI (опционально)
+            }
+            # PLACEMENT_HANDLER не указываем - он опционален
         }
 
         result = await self._call_method("imconnector.register", params)
