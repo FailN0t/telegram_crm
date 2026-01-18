@@ -4,6 +4,7 @@ Bitrix24 CRM API клиент
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlencode
@@ -133,46 +134,83 @@ class Bitrix24Client:
             logger.error(f"❌ Исключение при обновлении токена: {e}")
             return False
 
-    async def exchange_auth_code(self, code: str) -> bool:
+    async def exchange_auth_code(self, code: str, domain: Optional[str] = None) -> Dict[str, Any]:
         """
         Обмен authorization code на access/refresh токены
 
-        Bitrix24 OAuth flow
+        Bitrix24 OAuth flow для локальных приложений.
+
+        Args:
+            code: Authorization code от Bitrix24
+            domain: Домен портала (передаётся Bitrix24 при установке)
+
+        Returns:
+            Dict с результатом: {"success": bool, "domain": str, "error": str}
         """
+        target_domain = domain or self.domain
+
         try:
-            logger.info("🔄 Обмен authorization code на токены Bitrix24...")
+            logger.info(f"🔄 Обмен authorization code на токены Bitrix24 (domain={target_domain})...")
 
             async with aiohttp.ClientSession() as session:
-                params = {
+                # Важно: используем POST с form data, включаем redirect_uri
+                data = {
                     "grant_type": "authorization_code",
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
                     "code": code,
+                    "redirect_uri": self.redirect_uri,
                 }
 
-                async with session.get(
-                    f"https://{self.domain}/oauth/token/",
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        tokens = await response.json()
+                url = f"https://{target_domain}/oauth/token/"
+                logger.info(f"🔗 OAuth URL: {url}, redirect_uri: {self.redirect_uri}")
 
-                        self.access_token = tokens["access_token"]
-                        self.refresh_token = tokens["refresh_token"]
-                        expires_in = int(tokens.get("expires_in", 3600))
-                        self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+                async with session.post(url, data=data) as response:
+                    response_text = await response.text()
+                    logger.info(f"📥 OAuth response status: {response.status}")
 
-                        await self._save_tokens()
-                        logger.info("✅ Bitrix24 токены успешно получены")
-                        return True
+                    try:
+                        tokens = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        logger.error(f"❌ Не удалось разобрать ответ: {response_text}")
+                        return {"success": False, "error": f"Invalid response: {response_text}"}
 
-                    error_text = await response.text()
-                    logger.error(f"❌ Ошибка OAuth обмена: {error_text}")
-                    return False
+                    # Проверяем ошибки в ответе
+                    if "error" in tokens:
+                        error_msg = tokens.get("error_description", tokens.get("error"))
+                        logger.error(f"❌ OAuth ошибка от Bitrix24: {error_msg}")
+                        return {"success": False, "error": error_msg}
+
+                    if response.status != 200:
+                        logger.error(f"❌ HTTP ошибка {response.status}: {response_text}")
+                        return {"success": False, "error": f"HTTP {response.status}: {response_text}"}
+
+                    # Извлекаем актуальный домен из client_endpoint
+                    client_endpoint = tokens.get("client_endpoint", f"https://{target_domain}/")
+                    actual_domain = client_endpoint.replace("https://", "").replace("http://", "").split("/")[0]
+
+                    # Обновляем домен если отличается
+                    if actual_domain != self.domain:
+                        logger.info(f"📝 Обновляем домен: {self.domain} → {actual_domain}")
+                        self.domain = actual_domain
+
+                    self.access_token = tokens["access_token"]
+                    self.refresh_token = tokens["refresh_token"]
+                    expires_in = int(tokens.get("expires_in", 3600))
+                    self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+
+                    await self._save_tokens()
+                    logger.info(f"✅ Bitrix24 токены успешно получены для {actual_domain}")
+
+                    return {
+                        "success": True,
+                        "domain": actual_domain,
+                        "expires_in": expires_in
+                    }
 
         except Exception as e:
             logger.error(f"❌ Исключение при OAuth обмене: {e}")
-            return False
+            return {"success": False, "error": str(e)}
 
     def get_oauth_url(self) -> str:
         """Получить URL для OAuth авторизации"""

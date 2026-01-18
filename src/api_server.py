@@ -8,7 +8,7 @@ import time
 from collections import deque
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -1265,13 +1265,131 @@ def create_app() -> FastAPI:
             logger.error(f"❌ Ошибка получения статуса Open Channels: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @app.api_route("/api/bitrix24/install", methods=["GET", "POST"], tags=["Bitrix24"])
+    async def bitrix24_install_app(
+        request: Request,
+        code: str = None,
+        domain: str = None,
+        scope: str = None,
+        state: str = None,
+    ):
+        """
+        Установка приложения Bitrix24 (OAuth callback)
+
+        Вызывается Bitrix24 при установке локального приложения.
+        Bitrix24 передаёт code и domain в URL параметрах.
+
+        Flow:
+        1. Пользователь нажимает "Установить" в Bitrix24
+        2. Bitrix24 редиректит сюда с code и domain
+        3. Мы обмениваем code на access_token
+        4. Сохраняем токены в БД
+        5. Настраиваем Open Channels (если включено)
+        6. Редиректим обратно на портал
+        """
+        logger.info(f"📥 Bitrix24 install request: code={code[:20] if code else None}..., domain={domain}")
+
+        if not code:
+            return HTMLResponse(
+                content="""
+                <html>
+                    <head><title>Ошибка установки</title></head>
+                    <body>
+                        <h1>Ошибка: отсутствует код авторизации</h1>
+                        <p>Параметр 'code' не был передан Bitrix24.</p>
+                    </body>
+                </html>
+                """,
+                status_code=400
+            )
+
+        if settings.CRM_PROVIDER.lower() != "bitrix24":
+            return HTMLResponse(
+                content="""
+                <html>
+                    <head><title>Ошибка</title></head>
+                    <body>
+                        <h1>CRM провайдер не настроен на Bitrix24</h1>
+                    </body>
+                </html>
+                """,
+                status_code=400
+            )
+
+        # Используем домен из параметра или из настроек
+        target_domain = domain or settings.BITRIX24_DOMAIN
+
+        try:
+            # Создаём временный клиент для обмена токенов если bridge не инициализирован
+            if bridge and bridge.crm:
+                crm_client = bridge.crm
+            else:
+                from src.bitrix24_client import Bitrix24Client
+                crm_client = Bitrix24Client()
+
+            # Обмениваем code на токены
+            result = await crm_client.exchange_auth_code(code, target_domain)
+
+            if not result.get("success"):
+                error_msg = result.get("error", "Неизвестная ошибка")
+                logger.error(f"❌ Ошибка установки: {error_msg}")
+                return HTMLResponse(
+                    content=f"""
+                    <html>
+                        <head><title>Ошибка установки</title></head>
+                        <body>
+                            <h1>Ошибка установки приложения</h1>
+                            <p>{error_msg}</p>
+                            <p><a href="https://{target_domain}/">Вернуться на портал</a></p>
+                        </body>
+                    </html>
+                    """,
+                    status_code=500
+                )
+
+            actual_domain = result.get("domain", target_domain)
+            logger.info(f"✅ Bitrix24 приложение установлено для {actual_domain}")
+
+            # Настраиваем Open Channels если включено
+            if settings.BITRIX24_OPEN_CHANNELS_ENABLED:
+                try:
+                    logger.info("🔧 Настройка Open Channels...")
+                    setup_result = await crm_client.setup_open_channels(
+                        connector_id=settings.BITRIX24_CONNECTOR_ID,
+                        connector_name=settings.BITRIX24_CONNECTOR_NAME,
+                        webhook_url=f"https://{request.headers.get('host', 'localhost')}/api/webhook/bitrix24/openlines",
+                        line_id=settings.BITRIX24_LINE_ID
+                    )
+                    logger.info(f"✅ Open Channels настроены: {setup_result}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось настроить Open Channels: {e}")
+
+            # Редирект обратно на портал Bitrix24
+            return RedirectResponse(url=f"https://{actual_domain}/")
+
+        except Exception as e:
+            logger.exception(f"❌ Исключение при установке: {e}")
+            return HTMLResponse(
+                content=f"""
+                <html>
+                    <head><title>Ошибка установки</title></head>
+                    <body>
+                        <h1>Ошибка установки приложения</h1>
+                        <p>{str(e)}</p>
+                        <p><a href="https://{target_domain}/">Вернуться на портал</a></p>
+                    </body>
+                </html>
+                """,
+                status_code=500
+            )
+
     @app.get("/api/bitrix24/oauth/start", tags=["Bitrix24"])
     async def bitrix24_oauth_start():
         """
-        Начало OAuth авторизации Bitrix24
+        Начало OAuth авторизации Bitrix24 (ручной режим)
 
         Перенаправляет на страницу авторизации Bitrix24.
-        После подтверждения пользователь будет перенаправлен на /api/bitrix24/oauth/callback
+        Используйте если нужно переавторизовать приложение вручную.
         """
         if settings.CRM_PROVIDER.lower() != "bitrix24":
             raise HTTPException(
@@ -1288,22 +1406,33 @@ def create_app() -> FastAPI:
         oauth_url = bridge.crm.get_oauth_url()
         return RedirectResponse(url=oauth_url)
 
-    @app.get("/api/bitrix24/oauth/callback", tags=["Bitrix24"])
-    async def bitrix24_oauth_callback(code: str = None, error: str = None):
+    @app.api_route("/api/bitrix24/oauth/callback", methods=["GET", "POST"], tags=["Bitrix24"])
+    async def bitrix24_oauth_callback(
+        request: Request,
+        code: str = None,
+        domain: str = None,
+        error: str = None,
+        state: str = None,
+    ):
         """
         OAuth callback от Bitrix24
 
-        Обменивает authorization code на access/refresh токены
+        Обменивает authorization code на access/refresh токены.
+        Поддерживает как ручную авторизацию, так и установку приложения.
         """
         if error:
             logger.error(f"❌ Bitrix24 OAuth error: {error}")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": error,
-                    "message": "Авторизация отклонена или произошла ошибка"
-                }
+            return HTMLResponse(
+                content=f"""
+                <html>
+                    <head><title>Ошибка авторизации</title></head>
+                    <body>
+                        <h1>Авторизация отклонена</h1>
+                        <p>{error}</p>
+                    </body>
+                </html>
+                """,
+                status_code=400
             )
 
         if not code:
@@ -1312,35 +1441,61 @@ def create_app() -> FastAPI:
                 detail="Missing authorization code"
             )
 
-        if settings.CRM_PROVIDER.lower() != "bitrix24":
-            raise HTTPException(
-                status_code=400,
-                detail="CRM_PROVIDER must be 'bitrix24'"
-            )
+        target_domain = domain or settings.BITRIX24_DOMAIN
 
-        if not bridge or not bridge.crm:
-            raise HTTPException(
-                status_code=503,
-                detail="Bitrix24 client not initialized"
-            )
+        try:
+            if bridge and bridge.crm:
+                crm_client = bridge.crm
+            else:
+                from src.bitrix24_client import Bitrix24Client
+                crm_client = Bitrix24Client()
 
-        success = await bridge.crm.exchange_auth_code(code)
+            result = await crm_client.exchange_auth_code(code, target_domain)
 
-        if success:
-            logger.info("✅ Bitrix24 OAuth авторизация успешна")
-            return JSONResponse(
-                content={
-                    "success": True,
-                    "message": "Авторизация Bitrix24 успешна! Токены сохранены."
-                }
-            )
-        else:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "message": "Не удалось обменять код на токены. Проверьте логи."
-                }
+            if result.get("success"):
+                actual_domain = result.get("domain", target_domain)
+                logger.info(f"✅ Bitrix24 OAuth авторизация успешна для {actual_domain}")
+
+                return HTMLResponse(
+                    content=f"""
+                    <html>
+                        <head><title>Авторизация успешна</title></head>
+                        <body>
+                            <h1>✅ Авторизация Bitrix24 успешна!</h1>
+                            <p>Токены сохранены для домена: {actual_domain}</p>
+                            <p><a href="https://{actual_domain}/">Вернуться на портал</a></p>
+                        </body>
+                    </html>
+                    """
+                )
+            else:
+                error_msg = result.get("error", "Неизвестная ошибка")
+                return HTMLResponse(
+                    content=f"""
+                    <html>
+                        <head><title>Ошибка авторизации</title></head>
+                        <body>
+                            <h1>Ошибка авторизации</h1>
+                            <p>{error_msg}</p>
+                        </body>
+                    </html>
+                    """,
+                    status_code=400
+                )
+
+        except Exception as e:
+            logger.exception(f"❌ Исключение при OAuth: {e}")
+            return HTMLResponse(
+                content=f"""
+                <html>
+                    <head><title>Ошибка</title></head>
+                    <body>
+                        <h1>Ошибка авторизации</h1>
+                        <p>{str(e)}</p>
+                    </body>
+                </html>
+                """,
+                status_code=500
             )
 
     @app.get("/api/stats", response_model=StatsResponse, tags=["Monitoring"])
