@@ -17,11 +17,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Remove ui_chats.chat_id FK constraint to chat_mappings.
+    """Remove UI table FK constraints to chat_mappings.
 
-    The FK constraint prevents creating ui_chats entries for chats
+    The FK constraints prevent creating UI entries for chats
     that are not yet mapped to CRM contacts. This is wrong because:
-    - ui_chats stores ALL chats visible in UI
+    - ui_chats and ui_message_history store ALL chats visible in UI
     - chat_mappings stores ONLY CRM-linked chats
     - Not all chats need to be linked to CRM
     """
@@ -29,6 +29,13 @@ def upgrade() -> None:
     op.drop_constraint(
         "fk_ui_chats_chat_id",
         "ui_chats",
+        type_="foreignkey",
+    )
+
+    # Drop FK constraint ui_message_history.chat_id -> chat_mappings.telegram_chat_id
+    op.drop_constraint(
+        "fk_ui_message_history_chat_id",
+        "ui_message_history",
         type_="foreignkey",
     )
 
