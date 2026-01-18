@@ -1474,8 +1474,36 @@ def create_app() -> FastAPI:
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось настроить Open Channels: {e}")
 
-            # Редирект обратно на портал Bitrix24
-            return RedirectResponse(url=f"https://{actual_domain}/")
+            # Возвращаем HTML страницу с подтверждением (отображается в iframe)
+            return HTMLResponse(
+                content="""
+                <html>
+                    <head>
+                        <title>Telegram CRM установлен</title>
+                        <meta charset="utf-8">
+                        <style>
+                            body {
+                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                                max-width: 600px;
+                                margin: 40px auto;
+                                padding: 20px;
+                                text-align: center;
+                            }
+                            .success { color: #4CAF50; font-size: 48px; }
+                            h1 { color: #333; }
+                            p { color: #666; line-height: 1.6; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="success">✓</div>
+                        <h1>Приложение успешно установлено!</h1>
+                        <p>Telegram CRM готов к работе.</p>
+                        <p>Используйте API endpoints для отправки сообщений через Telegram.</p>
+                    </body>
+                </html>
+                """,
+                status_code=200
+            )
 
         except Exception as e:
             logger.exception(f"❌ Исключение при установке: {e}")
