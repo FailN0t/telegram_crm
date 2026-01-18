@@ -45,8 +45,9 @@ from src.app_settings import (
     update_settings_overrides,
     get_settings_payload
 )
-from src.bridge import AmoCRMTelegramBridge
+from src.bridge import CRMTelegramBridge
 from src.amocrm_client import AmoCRMClient
+from src.bitrix24_client import Bitrix24Client
 from src.retention import run_retention
 from src.rate_limiter import check_rate_limit
 from src.outbox import (
@@ -90,7 +91,7 @@ REQUEST_LATENCY = Histogram(
 # Pydantic модели для API
 class SendMessageRequest(BaseModel):
     """Запрос на отправку сообщения"""
-    contact_id: int = Field(..., description="ID контакта в AmoCRM")
+    contact_id: int = Field(..., description="ID контакта в CRM (AmoCRM/Bitrix24)")
     phone: Optional[str] = Field(None, description="Номер телефона (с +)")
     username: Optional[str] = Field(None, description="Username в Telegram")
     account_id: Optional[int] = Field(None, description="ID Telegram аккаунта")
@@ -209,10 +210,11 @@ class AdminTagUpdateRequest(BaseModel):
 
 
 # Глобальные переменные (будут инициализированы в main)
-bridge: Optional[AmoCRMTelegramBridge] = None
+bridge: Optional[CRMTelegramBridge] = None
 basic_scheme = HTTPBasic(auto_error=False)
 _ui_users_cache = {"raw": None, "parsed": {}}
 AMOCRM_STATE_KEY = "AMOCRM_OAUTH_STATE"
+BITRIX24_STATE_KEY = "BITRIX24_OAUTH_STATE"
 
 
 async def log_ui_event(level: str, message: str, data: Optional[dict] = None) -> dict:
@@ -535,21 +537,34 @@ def create_app() -> FastAPI:
             ).observe(time.time() - start)
         return response
 
-    def _ensure_amocrm_ready(require_bridge: bool = True) -> None:
+    def _ensure_crm_ready(require_bridge: bool = True) -> None:
+        """Проверка готовности CRM (AmoCRM или Bitrix24)"""
+        crm_provider = settings.CRM_PROVIDER.lower()
+
         if settings.OUTBOX_PROCESS_INLINE:
             if not bridge:
                 raise HTTPException(status_code=503, detail="Bridge not initialized")
-            if require_bridge and not bridge.amocrm:
-                raise HTTPException(status_code=503, detail="AmoCRM is not configured")
+            if require_bridge and not bridge.crm:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"{crm_provider.title()} is not configured"
+                )
             return
 
-        if not (
-            settings.AMOCRM_DOMAIN
-            and settings.AMOCRM_CLIENT_ID
-            and settings.AMOCRM_CLIENT_SECRET
-            and settings.AMOCRM_REDIRECT_URI
-        ):
-            raise HTTPException(status_code=503, detail="AmoCRM is not configured")
+        if crm_provider == "bitrix24":
+            if not (
+                settings.BITRIX24_WEBHOOK_URL or
+                (settings.BITRIX24_DOMAIN and settings.BITRIX24_ACCESS_TOKEN)
+            ):
+                raise HTTPException(status_code=503, detail="Bitrix24 is not configured")
+        else:
+            if not (
+                settings.AMOCRM_DOMAIN
+                and settings.AMOCRM_CLIENT_ID
+                and settings.AMOCRM_CLIENT_SECRET
+                and settings.AMOCRM_REDIRECT_URI
+            ):
+                raise HTTPException(status_code=503, detail="AmoCRM is not configured")
     
     @app.on_event("startup")
     async def startup():
@@ -723,7 +738,7 @@ def create_app() -> FastAPI:
         
         Требуется API ключ в заголовке: X-API-Key
         """
-        _ensure_amocrm_ready()
+        _ensure_crm_ready()
         
         if not request.phone and not request.username:
             raise HTTPException(
@@ -836,7 +851,7 @@ def create_app() -> FastAPI:
             ):
                 raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
-        _ensure_amocrm_ready()
+        _ensure_crm_ready()
         
         try:
             body_bytes = await request.body()
@@ -903,7 +918,431 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"❌ Ошибка обработки webhook: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
+    @app.post("/api/webhook/bitrix24", tags=["Webhooks"])
+    async def bitrix24_webhook(
+        request: Request,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """
+        Webhook от Bitrix24
+        Обработка событий из Bitrix24 (activities, tasks)
+        """
+        # Проверка секрета webhook
+        if settings.BITRIX24_WEBHOOK_SECRET:
+            provided = request.headers.get("X-Webhook-Secret")
+            if not provided or not secrets.compare_digest(
+                provided, settings.BITRIX24_WEBHOOK_SECRET
+            ):
+                raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+        _ensure_crm_ready()
+
+        try:
+            # Bitrix24 отправляет данные как form-urlencoded
+            content_type = request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                form_data = await request.form()
+                body = dict(form_data)
+            else:
+                body_bytes = await request.body()
+                body = json.loads(body_bytes.decode("utf-8"))
+
+            # Вычисляем hash для идемпотентности
+            body_str = json.dumps(body, sort_keys=True)
+            payload_hash = hashlib.sha256(body_str.encode()).hexdigest()
+            idempotency_key = f"bitrix24:{payload_hash}"
+
+            result = await db.execute(
+                select(MessageInbox).filter_by(idempotency_key=idempotency_key)
+            )
+            existing = result.scalars().first()
+            if existing:
+                return {
+                    "success": True,
+                    "processed": 0,
+                    "status": "duplicate"
+                }
+
+            db.add(MessageInbox(
+                idempotency_key=idempotency_key,
+                source="bitrix24_webhook",
+                payload_hash=payload_hash
+            ))
+            await db.commit()
+
+            logger.info("📥 Получен webhook от Bitrix24")
+            logger.debug(f"Webhook body: {body}")
+
+            results = []
+            event_type = body.get("event") or body.get("EVENT")
+
+            # Обработка активностей (CRM Activities)
+            if event_type in ("ONCRMACTIVITYADD", "ONCRMACTIVITYUPDATE"):
+                activity_id = (
+                    body.get("data", {}).get("FIELDS", {}).get("ID") or
+                    body.get("data[FIELDS][ID]")
+                )
+                if activity_id:
+                    account_id = await bridge.telegram.get_default_account_id()
+                    key = f"bitrix24_activity:{activity_id}"
+                    payload = {
+                        "source": "bitrix24_webhook",
+                        "activity_id": int(activity_id),
+                        "account_id": account_id
+                    }
+                    outbox, created = await enqueue_outbox(
+                        db,
+                        key,
+                        account_id or 0,
+                        None,
+                        0,
+                        payload
+                    )
+                    results.append({
+                        "activity_id": activity_id,
+                        "queued": created,
+                        "outbox_id": outbox.id
+                    })
+
+            # Обработка задач (Tasks)
+            if event_type in ("ONTASKADD", "ONTASKUPDATE"):
+                task_id = (
+                    body.get("data", {}).get("FIELDS_AFTER", {}).get("ID") or
+                    body.get("data[FIELDS_AFTER][ID]")
+                )
+                if task_id:
+                    account_id = await bridge.telegram.get_default_account_id()
+                    key = f"bitrix24_task:{task_id}"
+                    payload = {
+                        "source": "bitrix24_webhook",
+                        "task_id": int(task_id),
+                        "account_id": account_id
+                    }
+                    outbox, created = await enqueue_outbox(
+                        db,
+                        key,
+                        account_id or 0,
+                        None,
+                        0,
+                        payload
+                    )
+                    results.append({
+                        "task_id": task_id,
+                        "queued": created,
+                        "outbox_id": outbox.id
+                    })
+
+            return {
+                "success": True,
+                "processed": len(results),
+                "results": results
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки Bitrix24 webhook: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/webhook/bitrix24/openlines", tags=["Webhooks"])
+    async def bitrix24_openlines_webhook(
+        request: Request,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """
+        Webhook для Bitrix24 Open Channels (Открытые линии)
+
+        Обрабатывает события:
+        - ONIMCONNECTORMESSAGEADD: сообщение от оператора → внешнему пользователю (Telegram)
+        - ONIMCONNECTORLINEJOIN: коннектор подключен к линии
+        - ONIMCONNECTORLINEDELETE: коннектор отключен от линии
+        - ONIMCONNECTORMESSAGEUPDATE: сообщение обновлено
+        - ONIMCONNECTORMESSAGEDELETE: сообщение удалено
+        """
+        if not settings.BITRIX24_OPEN_CHANNELS_ENABLED:
+            return {"success": False, "error": "Open Channels disabled"}
+
+        # Проверка секрета webhook
+        if settings.BITRIX24_WEBHOOK_SECRET:
+            provided = request.headers.get("X-Webhook-Secret")
+            if not provided or not secrets.compare_digest(
+                provided, settings.BITRIX24_WEBHOOK_SECRET
+            ):
+                raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+        _ensure_crm_ready()
+
+        try:
+            # Bitrix24 отправляет данные как form-urlencoded
+            content_type = request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                form_data = await request.form()
+                body = dict(form_data)
+            else:
+                body_bytes = await request.body()
+                body = json.loads(body_bytes.decode("utf-8"))
+
+            logger.info("📥 Получен Open Lines webhook от Bitrix24")
+            logger.debug(f"Open Lines body: {body}")
+
+            event_type = body.get("event") or body.get("EVENT")
+            data = body.get("data") or body.get("DATA") or {}
+
+            # ONIMCONNECTORMESSAGEADD - сообщение от оператора к пользователю
+            # Нужно переслать в Telegram
+            if event_type == "ONIMCONNECTORMESSAGEADD":
+                messages = data.get("MESSAGES", [])
+                connector = data.get("CONNECTOR", "")
+                line_id = data.get("LINE", 0)
+
+                # Проверяем что это наш коннектор
+                if connector != settings.BITRIX24_CONNECTOR_ID:
+                    logger.debug(f"Игнорируем событие для другого коннектора: {connector}")
+                    return {"success": True, "processed": 0, "reason": "different_connector"}
+
+                results = []
+                for msg in messages:
+                    chat_info = msg.get("chat", {})
+                    message_info = msg.get("message", {})
+
+                    chat_id = chat_info.get("id")  # Это telegram chat_id
+                    message_text = message_info.get("text", "")
+                    message_id = message_info.get("id")
+
+                    if not chat_id or not message_text:
+                        continue
+
+                    # Ставим в очередь на отправку в Telegram
+                    account_id = await bridge.telegram.get_default_account_id()
+                    key = f"openline_msg:{message_id or chat_id}:{hash(message_text)}"
+                    payload = {
+                        "source": "bitrix24_openline",
+                        "chat_id": int(chat_id),
+                        "message": message_text,
+                        "bitrix_message_id": message_id,
+                        "line_id": line_id,
+                        "account_id": account_id
+                    }
+
+                    outbox, created = await enqueue_outbox(
+                        db,
+                        key,
+                        account_id or 0,
+                        None,
+                        0,  # chat_id хранится в payload
+                        payload
+                    )
+
+                    results.append({
+                        "chat_id": chat_id,
+                        "queued": created,
+                        "outbox_id": outbox.id
+                    })
+
+                    logger.info(
+                        f"📤 Сообщение от оператора поставлено в очередь: "
+                        f"chat_id={chat_id}, outbox_id={outbox.id}"
+                    )
+
+                return {
+                    "success": True,
+                    "event": "ONIMCONNECTORMESSAGEADD",
+                    "processed": len(results),
+                    "results": results
+                }
+
+            # ONIMCONNECTORLINEJOIN - коннектор подключен к линии
+            if event_type == "ONIMCONNECTORLINEJOIN":
+                connector = data.get("CONNECTOR", "")
+                line_id = data.get("LINE", 0)
+                logger.info(f"✅ Коннектор {connector} подключен к линии {line_id}")
+                return {
+                    "success": True,
+                    "event": "ONIMCONNECTORLINEJOIN",
+                    "connector": connector,
+                    "line_id": line_id
+                }
+
+            # ONIMCONNECTORLINEDELETE - коннектор отключен от линии
+            if event_type == "ONIMCONNECTORLINEDELETE":
+                connector = data.get("CONNECTOR", "")
+                line_id = data.get("LINE", 0)
+                logger.warning(f"⚠️ Коннектор {connector} отключен от линии {line_id}")
+                return {
+                    "success": True,
+                    "event": "ONIMCONNECTORLINEDELETE",
+                    "connector": connector,
+                    "line_id": line_id
+                }
+
+            # Другие события
+            logger.debug(f"Необработанное Open Lines событие: {event_type}")
+            return {
+                "success": True,
+                "event": event_type or "unknown",
+                "processed": 0
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки Open Lines webhook: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/bitrix24/openlines/setup", tags=["Bitrix24"])
+    async def setup_bitrix24_openlines(
+        webhook_url: Optional[str] = None,
+        api_key: str = Depends(verify_api_key)
+    ):
+        """
+        Настройка Bitrix24 Open Channels интеграции
+
+        1. Регистрирует коннектор
+        2. Активирует на линии
+        3. Регистрирует события (если указан webhook_url)
+
+        Требуется API ключ в заголовке: X-API-Key
+        """
+        if settings.CRM_PROVIDER.lower() != "bitrix24":
+            raise HTTPException(
+                status_code=400,
+                detail="CRM_PROVIDER must be 'bitrix24'"
+            )
+
+        if not bridge or not bridge.crm:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitrix24 client not initialized"
+            )
+
+        try:
+            result = await bridge.crm.setup_open_channels(
+                connector_id=settings.BITRIX24_CONNECTOR_ID,
+                connector_name=settings.BITRIX24_CONNECTOR_NAME,
+                webhook_url=webhook_url,
+                line_id=settings.BITRIX24_LINE_ID
+            )
+            return result
+        except Exception as e:
+            logger.error(f"❌ Ошибка настройки Open Channels: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/bitrix24/openlines/status", tags=["Bitrix24"])
+    async def get_bitrix24_openlines_status(
+        api_key: str = Depends(verify_api_key)
+    ):
+        """
+        Получение статуса Bitrix24 Open Channels
+
+        Требуется API ключ в заголовке: X-API-Key
+        """
+        if settings.CRM_PROVIDER.lower() != "bitrix24":
+            raise HTTPException(
+                status_code=400,
+                detail="CRM_PROVIDER must be 'bitrix24'"
+            )
+
+        if not bridge or not bridge.crm:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitrix24 client not initialized"
+            )
+
+        try:
+            status = await bridge.crm.get_connector_status(
+                connector_id=settings.BITRIX24_CONNECTOR_ID,
+                line_id=settings.BITRIX24_LINE_ID
+            )
+            lines = await bridge.crm.get_open_lines()
+            events = await bridge.crm.get_registered_events()
+
+            return {
+                "enabled": settings.BITRIX24_OPEN_CHANNELS_ENABLED,
+                "connector_id": settings.BITRIX24_CONNECTOR_ID,
+                "line_id": settings.BITRIX24_LINE_ID,
+                "connector_status": status,
+                "available_lines": lines,
+                "registered_events": events
+            }
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статуса Open Channels: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/bitrix24/oauth/start", tags=["Bitrix24"])
+    async def bitrix24_oauth_start():
+        """
+        Начало OAuth авторизации Bitrix24
+
+        Перенаправляет на страницу авторизации Bitrix24.
+        После подтверждения пользователь будет перенаправлен на /api/bitrix24/oauth/callback
+        """
+        if settings.CRM_PROVIDER.lower() != "bitrix24":
+            raise HTTPException(
+                status_code=400,
+                detail="CRM_PROVIDER must be 'bitrix24'"
+            )
+
+        if not bridge or not bridge.crm:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitrix24 client not initialized"
+            )
+
+        oauth_url = bridge.crm.get_oauth_url()
+        return RedirectResponse(url=oauth_url)
+
+    @app.get("/api/bitrix24/oauth/callback", tags=["Bitrix24"])
+    async def bitrix24_oauth_callback(code: str = None, error: str = None):
+        """
+        OAuth callback от Bitrix24
+
+        Обменивает authorization code на access/refresh токены
+        """
+        if error:
+            logger.error(f"❌ Bitrix24 OAuth error: {error}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": error,
+                    "message": "Авторизация отклонена или произошла ошибка"
+                }
+            )
+
+        if not code:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing authorization code"
+            )
+
+        if settings.CRM_PROVIDER.lower() != "bitrix24":
+            raise HTTPException(
+                status_code=400,
+                detail="CRM_PROVIDER must be 'bitrix24'"
+            )
+
+        if not bridge or not bridge.crm:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitrix24 client not initialized"
+            )
+
+        success = await bridge.crm.exchange_auth_code(code)
+
+        if success:
+            logger.info("✅ Bitrix24 OAuth авторизация успешна")
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": "Авторизация Bitrix24 успешна! Токены сохранены."
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": "Не удалось обменять код на токены. Проверьте логи."
+                }
+            )
+
     @app.get("/api/stats", response_model=StatsResponse, tags=["Monitoring"])
     async def get_stats(
         db: AsyncSession = Depends(get_db),
@@ -1310,8 +1749,8 @@ def create_app() -> FastAPI:
                 await delete_app_setting(AMOCRM_STATE_KEY)
                 raise HTTPException(status_code=400, detail="invalid_state")
 
-        if bridge and bridge.amocrm:
-            success = await bridge.amocrm.exchange_auth_code(code)
+        if bridge and bridge.crm and isinstance(bridge.crm, AmoCRMClient):
+            success = await bridge.crm.exchange_auth_code(code)
         else:
             client = AmoCRMClient()
             success = await client.exchange_auth_code(code)
@@ -1327,6 +1766,126 @@ def create_app() -> FastAPI:
         if not success:
             return RedirectResponse(url="/admin/settings?amocrm=error")
         return RedirectResponse(url="/admin/settings?amocrm=success")
+
+    @app.get("/api/admin/bitrix24/status", tags=["Admin"])
+    async def admin_bitrix24_status(ui_user: dict = Depends(require_admin)):
+        """Статус Bitrix24 интеграции."""
+        await refresh_settings_from_db()
+        # Bitrix24 может работать через webhook URL или OAuth
+        has_webhook = bool(settings.BITRIX24_WEBHOOK_URL)
+        has_oauth = all([
+            settings.BITRIX24_DOMAIN,
+            settings.BITRIX24_CLIENT_ID,
+            settings.BITRIX24_CLIENT_SECRET,
+        ])
+        has_tokens = bool(settings.BITRIX24_ACCESS_TOKEN)
+        configured = has_webhook or (has_oauth and has_tokens)
+        return {
+            "configured": configured,
+            "domain": settings.BITRIX24_DOMAIN,
+            "has_webhook_url": has_webhook,
+            "has_oauth": has_oauth,
+            "has_tokens": has_tokens,
+            "token_expires_at": settings.BITRIX24_TOKEN_EXPIRES_AT,
+        }
+
+    @app.get("/api/admin/bitrix24/oauth/url", tags=["Admin"])
+    async def admin_bitrix24_oauth_url(ui_user: dict = Depends(require_admin)):
+        """Сгенерировать URL для Bitrix24 OAuth."""
+        if not all([
+            settings.BITRIX24_DOMAIN,
+            settings.BITRIX24_CLIENT_ID,
+            settings.BITRIX24_CLIENT_SECRET,
+            settings.BITRIX24_REDIRECT_URI,
+        ]):
+            raise HTTPException(status_code=400, detail="bitrix24_config_missing")
+
+        state = secrets.token_urlsafe(16)
+        await set_app_setting(
+            BITRIX24_STATE_KEY,
+            {"state": state, "created_at": datetime.utcnow().isoformat() + "Z"}
+        )
+        # Bitrix24 OAuth URL
+        url = (
+            f"https://{settings.BITRIX24_DOMAIN}/oauth/authorize/"
+            f"?client_id={settings.BITRIX24_CLIENT_ID}"
+            f"&redirect_uri={settings.BITRIX24_REDIRECT_URI}"
+            f"&state={state}"
+            f"&response_type=code"
+        )
+        return {"url": url}
+
+    @app.get("/api/admin/bitrix24/oauth/callback", tags=["Admin"])
+    async def admin_bitrix24_oauth_callback(
+        code: Optional[str] = None,
+        state: Optional[str] = None,
+        ui_user: dict = Depends(require_admin)
+    ):
+        """OAuth callback для Bitrix24."""
+        if not code:
+            raise HTTPException(status_code=400, detail="code_required")
+
+        stored = await get_app_setting(BITRIX24_STATE_KEY)
+        if stored:
+            if not state or stored.get("state") != state:
+                await delete_app_setting(BITRIX24_STATE_KEY)
+                raise HTTPException(status_code=400, detail="invalid_state")
+
+        if bridge and bridge.crm and isinstance(bridge.crm, Bitrix24Client):
+            success = await bridge.crm.exchange_auth_code(code)
+        else:
+            client = Bitrix24Client()
+            success = await client.exchange_auth_code(code)
+
+        await delete_app_setting(BITRIX24_STATE_KEY)
+
+        await log_audit_event(
+            "bitrix24_oauth_exchange",
+            ui_user,
+            data={"success": success}
+        )
+
+        if not success:
+            return RedirectResponse(url="/admin/settings?bitrix24=error")
+        return RedirectResponse(url="/admin/settings?bitrix24=success")
+
+    @app.get("/api/admin/crm/status", tags=["Admin"])
+    async def admin_crm_status(ui_user: dict = Depends(require_admin)):
+        """Общий статус CRM интеграции (AmoCRM или Bitrix24)."""
+        await refresh_settings_from_db()
+        crm_provider = settings.CRM_PROVIDER.lower()
+
+        if crm_provider == "bitrix24":
+            has_webhook = bool(settings.BITRIX24_WEBHOOK_URL)
+            has_oauth = all([
+                settings.BITRIX24_DOMAIN,
+                settings.BITRIX24_CLIENT_ID,
+                settings.BITRIX24_CLIENT_SECRET,
+            ])
+            has_tokens = bool(settings.BITRIX24_ACCESS_TOKEN)
+            configured = has_webhook or (has_oauth and has_tokens)
+            return {
+                "provider": "bitrix24",
+                "configured": configured,
+                "domain": settings.BITRIX24_DOMAIN,
+                "has_tokens": has_tokens,
+                "token_expires_at": settings.BITRIX24_TOKEN_EXPIRES_AT,
+            }
+        else:
+            configured = all([
+                settings.AMOCRM_DOMAIN,
+                settings.AMOCRM_CLIENT_ID,
+                settings.AMOCRM_CLIENT_SECRET,
+                settings.AMOCRM_REDIRECT_URI,
+            ])
+            has_tokens = bool(settings.AMOCRM_ACCESS_TOKEN and settings.AMOCRM_REFRESH_TOKEN)
+            return {
+                "provider": "amocrm",
+                "configured": configured,
+                "domain": settings.AMOCRM_DOMAIN,
+                "has_tokens": has_tokens,
+                "token_expires_at": settings.AMOCRM_TOKEN_EXPIRES_AT,
+            }
 
     @app.get("/api/admin/templates", tags=["Admin"])
     async def admin_templates(
@@ -2237,7 +2796,7 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def set_bridge(bridge_instance: AmoCRMTelegramBridge):
+def set_bridge(bridge_instance: Optional[CRMTelegramBridge]):
     """Установка экземпляра bridge"""
     global bridge
     bridge = bridge_instance

@@ -16,21 +16,23 @@ from src.app_settings import refresh_settings_from_db
 from src.observability import init_error_tracking
 from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
-from src.bridge import AmoCRMTelegramBridge
+from src.bitrix24_client import Bitrix24Client
+from src.bridge import CRMTelegramBridge
 from src.api_server import app, set_bridge
 
 
 class Application:
     """Главное приложение"""
-    
+
     def __init__(self):
         self.telegram_manager = None
-        self.amocrm = None
+        self.crm = None  # CRM клиент (AmoCRM или Bitrix24)
         self.bridge = None
         self.api_server_task = None
         self.telegram_tasks = []
         self.running = False
-        
+        self.stop_event = asyncio.Event()
+
         logger.info(f"🚀 Инициализация {settings.APP_NAME} v{settings.APP_VERSION}")
     
     async def initialize(self):
@@ -48,24 +50,43 @@ class Application:
                 logger.warning("⚠️ Не удалось применить admin-настройки: %s", exc)
             logger.info("✅ База данных готова")
             
-            # 2. Инициализация AmoCRM клиента (опционально)
-            if (
-                settings.AMOCRM_DOMAIN
-                and settings.AMOCRM_CLIENT_ID
-                and settings.AMOCRM_CLIENT_SECRET
-                and settings.AMOCRM_REDIRECT_URI
-            ):
-                logger.info("🔗 Инициализация AmoCRM клиента...")
-                self.amocrm = AmoCRMClient()
-                
-                # Проверяем токены
-                if await self.amocrm.ensure_token_valid():
-                    logger.info("✅ AmoCRM клиент готов")
+            # 2. Инициализация CRM клиента (AmoCRM или Bitrix24)
+            crm_provider = settings.CRM_PROVIDER.lower()
+            logger.info(f"🔗 CRM Provider: {crm_provider}")
+
+            if crm_provider == "bitrix24":
+                # Bitrix24 CRM
+                if settings.BITRIX24_WEBHOOK_URL or (
+                    settings.BITRIX24_DOMAIN and settings.BITRIX24_ACCESS_TOKEN
+                ):
+                    logger.info("🔗 Инициализация Bitrix24 клиента...")
+                    self.crm = Bitrix24Client()
+                    logger.info("✅ Bitrix24 клиент готов")
                 else:
-                    logger.warning("⚠️ Токены AmoCRM не настроены или невалидны")
+                    self.crm = None
+                    logger.warning(
+                        "⚠️ Bitrix24 отключен: нет BITRIX24_WEBHOOK_URL "
+                        "или BITRIX24_DOMAIN + BITRIX24_ACCESS_TOKEN"
+                    )
             else:
-                self.amocrm = None
-                logger.warning("⚠️ AmoCRM отключен: нет обязательных настроек")
+                # AmoCRM (default)
+                if (
+                    settings.AMOCRM_DOMAIN
+                    and settings.AMOCRM_CLIENT_ID
+                    and settings.AMOCRM_CLIENT_SECRET
+                    and settings.AMOCRM_REDIRECT_URI
+                ):
+                    logger.info("🔗 Инициализация AmoCRM клиента...")
+                    self.crm = AmoCRMClient()
+
+                    # Проверяем токены
+                    if await self.crm.ensure_token_valid():
+                        logger.info("✅ AmoCRM клиент готов")
+                    else:
+                        logger.warning("⚠️ Токены AmoCRM не настроены или невалидны")
+                else:
+                    self.crm = None
+                    logger.warning("⚠️ AmoCRM отключен: нет обязательных настроек")
             
             if settings.OUTBOX_PROCESS_INLINE:
                 # 3. Инициализация Telegram клиента
@@ -76,7 +97,7 @@ class Application:
 
                 # 4. Создание Bridge
                 logger.info("🌉 Создание Bridge...")
-                self.bridge = AmoCRMTelegramBridge(self.telegram_manager, self.amocrm)
+                self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
 
                 # Устанавливаем bridge в API сервере
                 set_bridge(self.bridge)
@@ -185,26 +206,59 @@ application = Application()
 def handle_signal(signum, frame):
     """Обработка сигналов (Ctrl+C, etc.)"""
     logger.info(f"⚠️ Получен сигнал {signum}")
-    
-    # Создаем задачу остановки
-    asyncio.create_task(application.stop())
+
+    # Устанавливаем флаг остановки (безопасно из синхронного контекста)
+    application.stop_event.set()
 
 
 async def main():
     """Главная функция"""
-    
+
     # Создаем директории если их нет
     Path("logs").mkdir(exist_ok=True)
-    
+
     # Регистрируем обработчики сигналов
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
-    
+
     try:
-        await application.start()
+        # Запускаем приложение в фоновой задаче
+        app_task = asyncio.create_task(application.start())
+
+        # Ждем сигнала остановки или завершения приложения
+        done, pending = await asyncio.wait(
+            [app_task, asyncio.create_task(application.stop_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Если получен сигнал остановки
+        if application.stop_event.is_set():
+            logger.info("🛑 Получен сигнал остановки, graceful shutdown...")
+
+            # Останавливаем приложение с таймаутом
+            try:
+                await asyncio.wait_for(application.stop(), timeout=30.0)
+                logger.info("✅ Graceful shutdown завершен успешно")
+            except asyncio.TimeoutError:
+                logger.error("❌ Shutdown timeout (30s), принудительный выход")
+                # Отменяем все pending задачи
+                for task in pending:
+                    task.cancel()
+
+            # Отменяем app_task если он еще работает
+            if not app_task.done():
+                app_task.cancel()
+                try:
+                    await app_task
+                except asyncio.CancelledError:
+                    pass
+
     except KeyboardInterrupt:
         logger.info("⌨️  Остановка по Ctrl+C")
-        await application.stop()
+        try:
+            await asyncio.wait_for(application.stop(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("❌ Shutdown timeout")
     except Exception as e:
         logger.critical(f"💥 Необработанная ошибка: {e}")
         await application.stop()

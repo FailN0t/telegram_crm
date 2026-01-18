@@ -65,18 +65,7 @@ def upgrade() -> None:
     # 3. MessageOutbox.chat_id -> ChatMapping.telegram_chat_id
     # ========================================================================
     # Cleanup orphan outbox messages (where chat_id doesn't exist in chat_mappings)
-    # Note: We use SET NULL here because we want to preserve failed delivery attempts
-    # even if the chat mapping is deleted
-    conn.execute(text("""
-        DELETE FROM message_outbox
-        WHERE chat_id NOT IN (SELECT telegram_chat_id FROM chat_mappings)
-        AND status NOT IN ('sent', 'delivered')
-    """))
-
-    # For sent/delivered messages, we keep them but they will be SET NULL on chat deletion
-    # Add FK constraint with SET NULL (if chat mapping deleted, keep outbox but nullify chat_id)
-    # Actually, we need to make chat_id nullable first or use CASCADE
-    # Let's use CASCADE since orphan outbox messages without chat context are not useful
+    # Using CASCADE: orphan outbox messages without chat context are not useful
     conn.execute(text("""
         DELETE FROM message_outbox
         WHERE chat_id NOT IN (SELECT telegram_chat_id FROM chat_mappings)

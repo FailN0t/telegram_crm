@@ -8,6 +8,7 @@ import asyncio
 import unittest
 import subprocess
 import sys
+from pathlib import Path
 
 from sqlalchemy import select, inspect, text
 
@@ -41,8 +42,11 @@ class MigrationFKTests(unittest.TestCase):
 
     def test_migration_structure(self):
         """Test that migration file exists and has proper structure."""
-        migration_path = "/Users/dmitrifirsov/Downloads/ProjectsVC/Telegram_crm/alembic/versions/20260116_add_foreign_key_constraints.py"
-        self.assertTrue(os.path.exists(migration_path), "Migration file should exist")
+        # Use relative path from test file location
+        test_dir = Path(__file__).parent
+        project_root = test_dir.parent
+        migration_path = project_root / "alembic" / "versions" / "20260116_add_foreign_key_constraints.py"
+        self.assertTrue(migration_path.exists(), f"Migration file should exist at {migration_path}")
 
         with open(migration_path, 'r') as f:
             content = f.read()

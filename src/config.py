@@ -61,7 +61,54 @@ class Settings(BaseSettings):
     AMOCRM_FIELD_TELEGRAM_USERNAME: int = Field(default=0, env="AMOCRM_FIELD_TELEGRAM_USERNAME")
     AMOCRM_FIELD_TELEGRAM_CHAT_ID: int = Field(default=0, env="AMOCRM_FIELD_TELEGRAM_CHAT_ID")
     AMOCRM_FIELD_TELEGRAM_CONSENT: int = Field(default=0, env="AMOCRM_FIELD_TELEGRAM_CONSENT")
-    
+
+    # Bitrix24 CRM (alternative to AmoCRM)
+    BITRIX24_DOMAIN: Optional[str] = Field(default=None, env="BITRIX24_DOMAIN")
+    BITRIX24_CLIENT_ID: Optional[str] = Field(default=None, env="BITRIX24_CLIENT_ID")
+    BITRIX24_CLIENT_SECRET: Optional[str] = Field(default=None, env="BITRIX24_CLIENT_SECRET")
+    BITRIX24_REDIRECT_URI: Optional[str] = Field(default=None, env="BITRIX24_REDIRECT_URI")
+    BITRIX24_ACCESS_TOKEN: Optional[str] = Field(default=None, env="BITRIX24_ACCESS_TOKEN")
+    BITRIX24_REFRESH_TOKEN: Optional[str] = Field(default=None, env="BITRIX24_REFRESH_TOKEN")
+    BITRIX24_TOKEN_EXPIRES_AT: Optional[str] = Field(default=None, env="BITRIX24_TOKEN_EXPIRES_AT")
+    BITRIX24_WEBHOOK_SECRET: Optional[str] = Field(default=None, env="BITRIX24_WEBHOOK_SECRET")
+    # Входящий webhook URL (альтернатива OAuth)
+    BITRIX24_WEBHOOK_URL: Optional[str] = Field(default=None, env="BITRIX24_WEBHOOK_URL")
+
+    # Bitrix24 User Fields (UF_*) для Telegram данных
+    BITRIX24_FIELD_TELEGRAM_USERNAME: str = Field(
+        default="UF_CRM_TELEGRAM_USERNAME",
+        env="BITRIX24_FIELD_TELEGRAM_USERNAME"
+    )
+    BITRIX24_FIELD_TELEGRAM_CHAT_ID: str = Field(
+        default="UF_CRM_TELEGRAM_CHAT_ID",
+        env="BITRIX24_FIELD_TELEGRAM_CHAT_ID"
+    )
+    BITRIX24_FIELD_TELEGRAM_CONSENT: str = Field(
+        default="UF_CRM_TELEGRAM_CONSENT",
+        env="BITRIX24_FIELD_TELEGRAM_CONSENT"
+    )
+
+    # Bitrix24 Open Channels (Открытые линии) - двусторонний чат в карточке клиента
+    BITRIX24_OPEN_CHANNELS_ENABLED: bool = Field(
+        default=False,
+        env="BITRIX24_OPEN_CHANNELS_ENABLED"
+    )
+    BITRIX24_CONNECTOR_ID: str = Field(
+        default="telegram_mtproto",
+        env="BITRIX24_CONNECTOR_ID"
+    )
+    BITRIX24_CONNECTOR_NAME: str = Field(
+        default="Telegram MTProto",
+        env="BITRIX24_CONNECTOR_NAME"
+    )
+    BITRIX24_LINE_ID: int = Field(
+        default=0,
+        env="BITRIX24_LINE_ID"
+    )
+
+    # CRM Provider: "amocrm" или "bitrix24"
+    CRM_PROVIDER: str = Field(default="amocrm", env="CRM_PROVIDER")
+
     # Database
     DATABASE_URL: str = Field(
         default="postgresql://postgres:password@localhost:5432/telegram_bot",

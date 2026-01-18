@@ -55,6 +55,21 @@ redis.call('EXPIRE', key, ttl)
 return {1, current_timestamp}
 """
 
+# Lua скрипт для безопасного декремента (не уходит в минус, игнорирует несуществующие ключи)
+# Возвращает: новое значение или 0 если ключ не существует
+LUA_SAFE_DECREMENT = """
+local key = KEYS[1]
+local current = redis.call('GET', key)
+if not current then
+    return 0
+end
+local current_val = tonumber(current)
+if current_val <= 0 then
+    return 0
+end
+return redis.call('DECR', key)
+"""
+
 
 class AntiSpamManager:
     """
@@ -84,6 +99,7 @@ class AntiSpamManager:
         # Кеш для скомпилированных Lua скриптов
         self._lua_check_increment_sha: Optional[str] = None
         self._lua_check_delay_sha: Optional[str] = None
+        self._lua_safe_decrement_sha: Optional[str] = None
 
         logger.info(
             f"📊 Anti-Spam инициализирован: "
@@ -166,6 +182,13 @@ class AntiSpamManager:
                 logger.debug("Lua скрипт check_delay загружен")
             except Exception as exc:
                 logger.warning(f"Не удалось загрузить Lua скрипт check_delay: {exc}")
+
+        if not self._lua_safe_decrement_sha:
+            try:
+                self._lua_safe_decrement_sha = await redis.script_load(LUA_SAFE_DECREMENT)
+                logger.debug("Lua скрипт safe_decrement загружен")
+            except Exception as exc:
+                logger.warning(f"Не удалось загрузить Lua скрипт safe_decrement: {exc}")
 
     async def _atomic_check_and_increment(
         self,
@@ -269,6 +292,46 @@ class AntiSpamManager:
         except Exception as exc:
             logger.error(f"Ошибка при выполнении Lua скрипта check_delay: {exc}")
             raise
+
+    async def _safe_decrement(self, redis, key: str) -> int:
+        """
+        Безопасно декрементирует счетчик (не уходит в минус, игнорирует несуществующие ключи)
+
+        Args:
+            redis: Redis клиент
+            key: Ключ счетчика
+
+        Returns:
+            Новое значение счетчика или 0 если ключ не существует
+        """
+        await self._ensure_lua_scripts(redis)
+
+        try:
+            if self._lua_safe_decrement_sha:
+                result = await redis.evalsha(
+                    self._lua_safe_decrement_sha,
+                    1,  # количество ключей
+                    key
+                )
+            else:
+                result = await redis.eval(
+                    LUA_SAFE_DECREMENT,
+                    1,
+                    key
+                )
+
+            return int(result)
+
+        except Exception as exc:
+            logger.error(f"Ошибка при выполнении Lua скрипта safe_decrement: {exc}")
+            # В случае ошибки, fallback на обычный decr
+            try:
+                current = await redis.get(key)
+                if current and int(current) > 0:
+                    return await redis.decr(key)
+            except Exception:
+                pass
+            return 0
 
     async def try_register_send(
         self,
@@ -375,7 +438,7 @@ class AntiSpamManager:
                         2 * 24 * 60 * 60
                     )
                     if not op_day_ok:
-                        await redis.decr(operator_hour_key)
+                        await self._safe_decrement(redis, operator_hour_key)
                         return False, (
                             f"⚠️ Превышен лимит оператора в день "
                             f"({op_day_count}/{operator_day_limit})"
@@ -391,9 +454,9 @@ class AntiSpamManager:
             )
             if not hour_ok:
                 if operator_hour_incremented and operator_hour_key:
-                    await redis.decr(operator_hour_key)
+                    await self._safe_decrement(redis, operator_hour_key)
                 if operator_day_incremented and operator_day_key:
-                    await redis.decr(operator_day_key)
+                    await self._safe_decrement(redis, operator_day_key)
                 return False, (
                     f"⚠️ Превышен лимит сообщений в час "
                     f"({hour_count}/{self.MAX_MESSAGES_PER_HOUR})"
@@ -410,11 +473,11 @@ class AntiSpamManager:
                 )
                 if not day_ok:
                     # Откатываем hour_count, так как мы не смогли зарегистрировать отправку
-                    await redis.decr(hour_key)
+                    await self._safe_decrement(redis, hour_key)
                     if operator_hour_incremented and operator_hour_key:
-                        await redis.decr(operator_hour_key)
+                        await self._safe_decrement(redis, operator_hour_key)
                     if operator_day_incremented and operator_day_key:
-                        await redis.decr(operator_day_key)
+                        await self._safe_decrement(redis, operator_day_key)
                     return False, (
                         f"⚠️ Превышен лимит новых чатов в день "
                         f"({day_count}/{self.MAX_NEW_CHATS_PER_DAY})"
