@@ -742,7 +742,8 @@ class Bitrix24Client:
         self,
         connector_id: str = "telegram_mtproto",
         name: str = "Telegram MTProto",
-        icon_url: Optional[str] = None
+        icon_url: Optional[str] = None,
+        placement_handler_url: Optional[str] = None
     ) -> bool:
         """
         Регистрация коннектора для Open Channels
@@ -770,8 +771,11 @@ class Bitrix24Client:
             "ICON": {
                 "DATA_IMAGE": icon_url or default_icon
             }
-            # PLACEMENT_HANDLER не указываем - он опционален
         }
+
+        # Добавляем PLACEMENT_HANDLER если указан
+        if placement_handler_url:
+            params["PLACEMENT_HANDLER"] = placement_handler_url
 
         result = await self._call_method("imconnector.register", params)
 
@@ -1278,7 +1282,8 @@ class Bitrix24Client:
         connector_id: str = "telegram_mtproto",
         connector_name: str = "Telegram MTProto",
         webhook_url: Optional[str] = None,
-        line_id: int = 0
+        line_id: int = 0,
+        placement_handler_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Полная настройка Open Channels интеграции
@@ -1310,7 +1315,8 @@ class Bitrix24Client:
             # 1. Регистрация коннектора
             results["connector_registered"] = await self.register_connector(
                 connector_id=connector_id,
-                name=connector_name
+                name=connector_name,
+                placement_handler_url=placement_handler_url
             )
 
             if not results["connector_registered"]:

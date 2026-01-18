@@ -1043,6 +1043,59 @@ def create_app() -> FastAPI:
             logger.error(f"❌ Ошибка обработки Bitrix24 webhook: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @app.get("/api/bitrix24/openlines/placement", tags=["Bitrix24"])
+    async def bitrix24_openlines_placement(request: Request):
+        """
+        Placement handler для Open Channels коннектора
+
+        Отображает UI страницу настроек коннектора в Bitrix24
+        """
+        return HTMLResponse(
+            content="""
+            <html>
+                <head>
+                    <title>Telegram MTProto Connector</title>
+                    <meta charset="utf-8">
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                            max-width: 600px;
+                            margin: 20px auto;
+                            padding: 20px;
+                        }
+                        .status {
+                            background: #e8f5e9;
+                            padding: 15px;
+                            border-radius: 4px;
+                            margin: 20px 0;
+                        }
+                        .status-icon { color: #4CAF50; font-size: 24px; }
+                        h1 { color: #333; font-size: 24px; }
+                        p { color: #666; line-height: 1.6; }
+                        .info { background: #f5f5f5; padding: 10px; border-radius: 4px; margin: 10px 0; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Telegram MTProto Connector</h1>
+                    <div class="status">
+                        <div class="status-icon">✓</div>
+                        <strong>Коннектор активен</strong>
+                    </div>
+                    <p>Коннектор успешно настроен и готов к работе.</p>
+                    <div class="info">
+                        <strong>Как это работает:</strong>
+                        <ul>
+                            <li>Сообщения из Telegram будут отображаться в карточках контактов</li>
+                            <li>Вы можете отвечать прямо из Bitrix24</li>
+                            <li>Все сообщения синхронизируются автоматически</li>
+                        </ul>
+                    </div>
+                </body>
+            </html>
+            """,
+            status_code=200
+        )
+
     @app.post("/api/webhook/bitrix24/openlines", tags=["Webhooks"])
     async def bitrix24_openlines_webhook(
         request: Request,
@@ -1464,11 +1517,13 @@ def create_app() -> FastAPI:
             if settings.BITRIX24_OPEN_CHANNELS_ENABLED:
                 try:
                     logger.info("🔧 Настройка Open Channels...")
+                    host = request.headers.get('host', 'localhost')
                     setup_result = await crm_client.setup_open_channels(
                         connector_id=settings.BITRIX24_CONNECTOR_ID,
                         connector_name=settings.BITRIX24_CONNECTOR_NAME,
-                        webhook_url=f"https://{request.headers.get('host', 'localhost')}/api/webhook/bitrix24/openlines",
-                        line_id=settings.BITRIX24_LINE_ID
+                        webhook_url=f"https://{host}/api/webhook/bitrix24/openlines",
+                        line_id=settings.BITRIX24_LINE_ID,
+                        placement_handler_url=f"https://{host}/api/bitrix24/openlines/placement"
                     )
                     logger.info(f"✅ Open Channels настроены: {setup_result}")
                 except Exception as e:
