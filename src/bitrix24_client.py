@@ -759,11 +759,16 @@ class Bitrix24Client:
         """
         logger.info(f"📝 Регистрация коннектора Open Channels: {connector_id}")
 
+        # Telegram logo SVG в base64 (если иконка не указана)
+        default_icon = (
+            "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjQiIGN5PSIyNCIgcj0iMjQiIGZpbGw9IiMwMDg4Y2MiLz4KPHBhdGggZD0iTTEwLjUgMjMuNUwyMC41IDE5LjVMMzIuNSAxNS41TDM4LjUgMTMuNUMzOS41IDEzLjUgNDAuNSAxNC41IDQwLjUgMTUuNUw0MC41IDE3LjVMMzguNSAyOC41TDM2LjUgMzQuNUMzNi41IDM1LjUgMzUuNSAzNi41IDM0LjUgMzYuNUMzMy41IDM2LjUgMzMgMzYgMzIuNSAzNS41TDI1LjUgMzAuNUwyMi41IDI4LjVMMTcuNSAzMy41QzE2LjUgMzQuNSAxNS41IDM0LjUgMTQuNSAzMy41QzEzLjUgMzIuNSAxMy41IDMxLjUgMTMuNSAzMC41TDEzLjUgMjQuNUwxMC41IDIzLjVaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K"
+        )
+
         params = {
             "ID": connector_id,
             "NAME": name,
             "ICON": {
-                "DATA_IMAGE": icon_url or ""
+                "DATA_IMAGE": icon_url or default_icon
             },
             "PLACEMENT_HANDLER": ""  # URL для обработки UI (опционально)
         }
