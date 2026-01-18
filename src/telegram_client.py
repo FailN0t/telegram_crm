@@ -50,11 +50,13 @@ class MTProtoClient:
         account_id: int,
         phone_number: Optional[str] = None,
         session_string: Optional[str] = None,
-        session_name: Optional[str] = None
+        session_name: Optional[str] = None,
+        bridge=None
     ):
         self.account_id = account_id
         self.phone_number = phone_number or settings.TELEGRAM_PHONE
         self.session_name = session_name or f"{settings.TELEGRAM_SESSION_NAME}_{account_id}"
+        self.bridge = bridge
         if session_string:
             self.client = TelegramClient(
                 StringSession(session_string),
@@ -1112,48 +1114,59 @@ class MTProtoClient:
                 media_size=media_size
             )
             
-            # Сохраняем в БД
-            try:
-                async with SessionLocal() as db:
-                    # Ищем или создаем маппинг
-                    result = await db.execute(
-                        select(ChatMapping).filter_by(
+            # Обработка через Bridge (для CRM интеграции и Open Channels)
+            if self.bridge:
+                try:
+                    async with SessionLocal() as db:
+                        await self.bridge.handle_incoming_message(
+                            db=db,
                             telegram_chat_id=sender.id,
-                            account_id=self.account_id
+                            telegram_user_id=sender.id,
+                            user_first_name=sender.first_name or "",
+                            user_last_name=sender.last_name,
+                            username=sender.username,
+                            message_text=message.text or "[медиа]",
+                            message_id=message.id
                         )
-                    )
-                    mapping = result.scalars().first()
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка обработки через Bridge: {e}")
+            else:
+                # Fallback: сохраняем только если есть маппинг
+                try:
+                    async with SessionLocal() as db:
+                        result = await db.execute(
+                            select(ChatMapping).filter_by(
+                                telegram_chat_id=sender.id,
+                                account_id=self.account_id
+                            )
+                        )
+                        mapping = result.scalars().first()
 
-                    if mapping:
-                        # Сохраняем сообщение в историю
-                        history = MessageHistory(
-                            account_id=self.account_id,
-                            chat_mapping_id=mapping.id,
-                            amocrm_contact_id=mapping.amocrm_contact_id,
-                            direction='inbound',
-                            message_text=message.text or '[медиа]',
-                            message_type='text' if message.text else 'media',
-                            telegram_message_id=message.id,
-                            telegram_chat_id=sender.id,
-                            status='received'
-                        )
-                        db.add(history)
-                        await db.commit()
-                        
-                        logger.info(
-                            f"✅ Сообщение сохранено в БД "
-                            f"(contact_id: {mapping.amocrm_contact_id})"
-                        )
-                        
-                        # TODO: Создать примечание в AmoCRM
-                        
-                    else:
-                        logger.warning(
-                            f"⚠️ Пользователь @{sender.username or sender.id} "
-                            f"не связан с AmoCRM"
-                        )
-            except Exception as e:
-                logger.warning(f"⚠️ БД недоступна для входящего сообщения: {e}")
+                        if mapping:
+                            history = MessageHistory(
+                                account_id=self.account_id,
+                                chat_mapping_id=mapping.id,
+                                amocrm_contact_id=mapping.amocrm_contact_id,
+                                direction='inbound',
+                                message_text=message.text or '[медиа]',
+                                message_type='text' if message.text else 'media',
+                                telegram_message_id=message.id,
+                                telegram_chat_id=sender.id,
+                                status='received'
+                            )
+                            db.add(history)
+                            await db.commit()
+                            logger.info(
+                                f"✅ Сообщение сохранено в БД "
+                                f"(contact_id: {mapping.amocrm_contact_id})"
+                            )
+                        else:
+                            logger.warning(
+                                f"⚠️ Пользователь @{sender.username or sender.id} "
+                                f"не связан с CRM"
+                            )
+                except Exception as e:
+                    logger.warning(f"⚠️ БД недоступна для входящего сообщения: {e}")
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки входящего сообщения: {e}")

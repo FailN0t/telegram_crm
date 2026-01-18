@@ -19,6 +19,12 @@ class TelegramClientManager:
         self._account_order: List[int] = []
         self._rr_index = 0
         self._lock = asyncio.Lock()
+        self._bridge = None
+
+    def set_bridge(self, bridge):
+        """Установка bridge для обработки входящих сообщений"""
+        self._bridge = bridge
+        logger.info("✅ Bridge установлен в TelegramClientManager")
 
     async def refresh_accounts(self, active_only: bool = True) -> List[TelegramAccount]:
         async with SessionLocal() as session:
@@ -72,7 +78,8 @@ class TelegramClientManager:
         client = MTProtoClient(
             account_id=account.id,
             phone_number=account.phone_number,
-            session_string=account.session_string
+            session_string=account.session_string,
+            bridge=self._bridge
         )
         await client.start()
         self._clients[account_id] = client

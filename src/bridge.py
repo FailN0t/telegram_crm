@@ -586,6 +586,53 @@ class CRMTelegramBridge:
             f"chat_id={telegram_chat_id}, user={user_name}"
         )
 
+        # Проверяем есть ли mapping, если нет - создаем контакт
+        mapping_result = await db.execute(
+            select(ChatMapping).filter_by(telegram_chat_id=telegram_chat_id)
+        )
+        mapping = mapping_result.scalars().first()
+
+        contact_id = None
+        if mapping:
+            contact_id = mapping.amocrm_contact_id
+            logger.info(f"✅ Найден mapping: contact_id={contact_id}")
+        else:
+            # Автоматически создаем контакт в Bitrix24
+            logger.info(f"➕ Контакт не найден, создаем новый для chat_id={telegram_chat_id}")
+
+            # Извлекаем имя и фамилию из user_name
+            name_parts = user_name.split(" ", 1)
+            first_name = name_parts[0] if name_parts else "Telegram User"
+            last_name = name_parts[1] if len(name_parts) > 1 else None
+
+            # Убираем @username из имени если есть
+            if " (@" in (last_name or first_name):
+                if last_name and " (@" in last_name:
+                    last_name = last_name.split(" (@")[0]
+                elif " (@" in first_name:
+                    first_name = first_name.split(" (@")[0]
+
+            # Создаем контакт
+            contact_id = await self.crm.create_contact(
+                first_name=first_name,
+                last_name=last_name,
+                telegram_chat_id=telegram_chat_id
+            )
+
+            if contact_id:
+                # Создаем mapping
+                new_mapping = ChatMapping(
+                    account_id=1,  # TODO: получить account_id из контекста
+                    telegram_chat_id=telegram_chat_id,
+                    amocrm_contact_id=contact_id,
+                    is_active=True
+                )
+                db.add(new_mapping)
+                await db.commit()
+                logger.info(f"✅ Создан контакт {contact_id} и mapping для chat_id={telegram_chat_id}")
+            else:
+                logger.warning(f"⚠️ Не удалось создать контакт для chat_id={telegram_chat_id}")
+
         try:
             result = await self.crm.send_message_to_open_line(
                 connector_id=settings.BITRIX24_CONNECTOR_ID,
@@ -600,21 +647,17 @@ class CRMTelegramBridge:
             if result:
                 logger.info(f"✅ Сообщение переслано в Open Line")
 
-                # Пытаемся привязать чат к контакту CRM (если есть связь)
-                mapping_result = await db.execute(
-                    select(ChatMapping).filter_by(telegram_chat_id=telegram_chat_id)
-                )
-                mapping = mapping_result.scalars().first()
-
-                if mapping and mapping.amocrm_contact_id:
+                # Пытаемся привязать чат к контакту CRM (если есть contact_id)
+                if contact_id:
                     # Получаем ID чата из результата (если есть)
                     bitrix_chat_id = result.get("CHAT_ID") or result.get("chat_id")
                     if bitrix_chat_id:
                         try:
                             await self.crm.link_chat_to_contact(
                                 chat_id=int(bitrix_chat_id),
-                                contact_id=mapping.amocrm_contact_id
+                                contact_id=contact_id
                             )
+                            logger.info(f"✅ Чат {bitrix_chat_id} привязан к контакту {contact_id}")
                         except Exception as e:
                             logger.warning(f"⚠️ Не удалось привязать чат к контакту: {e}")
 

@@ -99,8 +99,9 @@ class Application:
                 logger.info("🌉 Создание Bridge...")
                 self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
 
-                # Устанавливаем bridge в API сервере
+                # Устанавливаем bridge в API сервере и TelegramClientManager
                 set_bridge(self.bridge)
+                self.telegram_manager.set_bridge(self.bridge)
                 logger.info("✅ Bridge готов")
             else:
                 logger.warning(

@@ -397,6 +397,55 @@ class Bitrix24Client:
 
         return None
 
+    async def create_contact(
+        self,
+        first_name: str,
+        last_name: Optional[str] = None,
+        phone: Optional[str] = None,
+        telegram_username: Optional[str] = None,
+        telegram_chat_id: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Создание нового контакта в Bitrix24
+
+        Args:
+            first_name: Имя
+            last_name: Фамилия (опционально)
+            phone: Телефон (опционально)
+            telegram_username: Username в Telegram (опционально)
+            telegram_chat_id: Chat ID в Telegram (опционально)
+
+        Returns:
+            ID созданного контакта или None
+        """
+        logger.info(f"➕ Создание контакта: {first_name} {last_name or ''}")
+
+        fields = {
+            "NAME": first_name
+        }
+
+        if last_name:
+            fields["LAST_NAME"] = last_name
+
+        if phone:
+            fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
+
+        if telegram_username and settings.BITRIX24_FIELD_TELEGRAM_USERNAME:
+            fields[settings.BITRIX24_FIELD_TELEGRAM_USERNAME] = telegram_username
+
+        if telegram_chat_id and settings.BITRIX24_FIELD_TELEGRAM_CHAT_ID:
+            fields[settings.BITRIX24_FIELD_TELEGRAM_CHAT_ID] = str(telegram_chat_id)
+
+        result = await self._call_method("crm.contact.add", {"fields": fields})
+
+        if result and result.get("result"):
+            contact_id = result["result"]
+            logger.info(f"✅ Контакт создан: ID {contact_id}")
+            return int(contact_id)
+
+        logger.error(f"❌ Не удалось создать контакт")
+        return None
+
     async def get_contact_field(
         self,
         contact_id: int,
