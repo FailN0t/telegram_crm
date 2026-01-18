@@ -24,7 +24,10 @@ class TelegramClientManager:
     def set_bridge(self, bridge):
         """Установка bridge для обработки входящих сообщений"""
         self._bridge = bridge
-        logger.info("✅ Bridge установлен в TelegramClientManager")
+        # Обновляем bridge во всех существующих клиентах
+        for client in self._clients.values():
+            client.bridge = bridge
+        logger.info("✅ Bridge установлен в TelegramClientManager и во всех клиентах")
 
     async def refresh_accounts(self, active_only: bool = True) -> List[TelegramAccount]:
         async with SessionLocal() as session:
