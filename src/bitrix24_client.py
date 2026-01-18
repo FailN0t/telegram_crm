@@ -212,6 +212,55 @@ class Bitrix24Client:
             logger.error(f"❌ Исключение при OAuth обмене: {e}")
             return {"success": False, "error": str(e)}
 
+    async def save_tokens_directly(
+        self,
+        access_token: str,
+        refresh_token: Optional[str],
+        domain: str,
+        expires_in: int = 3600
+    ) -> Dict[str, Any]:
+        """
+        Сохранение токенов напрямую (без OAuth code exchange)
+
+        Используется для ONAPPINSTALL события, когда Bitrix24 передаёт
+        токены напрямую при установке локального приложения.
+
+        Args:
+            access_token: Access token от Bitrix24
+            refresh_token: Refresh token (опционально)
+            domain: Домен портала Bitrix24
+            expires_in: Время жизни токена в секундах (по умолчанию 3600)
+
+        Returns:
+            Dict с результатом: {"success": bool, "domain": str, "error": str}
+        """
+        try:
+            logger.info(f"💾 Сохранение Bitrix24 токенов для {domain}...")
+
+            # Обновляем домен если отличается
+            if domain != self.domain:
+                logger.info(f"📝 Обновляем домен: {self.domain} → {domain}")
+                self.domain = domain
+
+            # Сохраняем токены
+            self.access_token = access_token
+            self.refresh_token = refresh_token
+            self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+
+            # Сохраняем в БД
+            await self._save_tokens()
+            logger.info(f"✅ Bitrix24 токены успешно сохранены для {domain}")
+
+            return {
+                "success": True,
+                "domain": domain,
+                "expires_in": expires_in
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Исключение при сохранении токенов: {e}")
+            return {"success": False, "error": str(e)}
+
     def get_oauth_url(self) -> str:
         """Получить URL для OAuth авторизации"""
         params = {

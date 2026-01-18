@@ -1274,60 +1274,93 @@ def create_app() -> FastAPI:
         state: str = None,
     ):
         """
-        Установка приложения Bitrix24 (OAuth callback)
+        Установка приложения Bitrix24 (ONAPPINSTALL event + OAuth callback)
 
-        Вызывается Bitrix24 при установке локального приложения.
-        Bitrix24 передаёт code и domain в URL или POST параметрах.
+        Bitrix24 может вызывать этот endpoint двумя способами:
+        1. ONAPPINSTALL событие - POST с auth[access_token], auth[refresh_token], DOMAIN
+        2. OAuth code flow - GET/POST с code и domain параметрами
+        3. Frame call - POST с APP_SID (открытие приложения в iframe)
 
-        Flow:
+        Flow для ONAPPINSTALL:
         1. Пользователь нажимает "Установить" в Bitrix24
-        2. Bitrix24 редиректит сюда с code и domain
-        3. Мы обмениваем code на access_token
-        4. Сохраняем токены в БД
-        5. Настраиваем Open Channels (если включено)
-        6. Редиректим обратно на портал
+        2. Bitrix24 отправляет POST с токенами напрямую
+        3. Сохраняем токены в БД
+        4. Настраиваем Open Channels (если включено)
+        5. Возвращаем HTML страницу с подтверждением
         """
         # Логируем входящий запрос для отладки
         logger.info(f"📥 Bitrix24 install: method={request.method}, query={dict(request.query_params)}")
+
+        # Переменные для токенов (если придут напрямую)
+        access_token = None
+        refresh_token = None
 
         # Получаем параметры из query string
         if not code:
             code = request.query_params.get("code")
         if not domain:
-            domain = request.query_params.get("domain")
-        if not scope:
-            scope = request.query_params.get("scope")
+            domain = request.query_params.get("domain") or request.query_params.get("DOMAIN")
 
-        # Если POST - проверяем form data
-        if request.method == "POST" and not code:
+        # Если POST - проверяем form data и auth параметры
+        if request.method == "POST":
             try:
                 form_data = await request.form()
+                form_dict = dict(form_data)
+                logger.info(f"📥 Bitrix24 POST form keys: {list(form_dict.keys())}")
+
+                # Стандартные параметры
                 code = code or form_data.get("code")
-                domain = domain or form_data.get("domain")
+                domain = domain or form_data.get("domain") or form_data.get("DOMAIN")
                 scope = scope or form_data.get("scope")
-                logger.info(f"📥 Bitrix24 install POST form: code={code[:20] if code else None}..., domain={domain}")
+
+                # ONAPPINSTALL формат: auth[access_token], auth[refresh_token]
+                access_token = form_data.get("auth[access_token]")
+                refresh_token = form_data.get("auth[refresh_token]")
+
+                # Также проверяем APP_SID для frame calls
+                app_sid = form_data.get("APP_SID")
+
+                logger.info(
+                    f"📥 Bitrix24 parsed: code={bool(code)}, domain={domain}, "
+                    f"access_token={bool(access_token)}, refresh_token={bool(refresh_token)}, "
+                    f"app_sid={bool(app_sid)}"
+                )
+
+                # Если это frame call (APP_SID есть, но нет токенов) - показываем UI
+                if app_sid and not access_token and not code:
+                    logger.info(f"📥 Bitrix24 frame call (APP_SID present), showing app UI")
+                    return HTMLResponse(
+                        content="""
+                        <html>
+                            <head>
+                                <title>Telegram CRM</title>
+                                <meta charset="utf-8">
+                            </head>
+                            <body>
+                                <h1>Telegram CRM для Bitrix24</h1>
+                                <p>Приложение успешно установлено.</p>
+                                <p>Используйте API endpoints для отправки сообщений через Telegram.</p>
+                            </body>
+                        </html>
+                        """,
+                        status_code=200
+                    )
+
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось прочитать form data: {e}")
 
-        # Также проверяем AUTH_ID для REST событий
-        if not code:
-            auth_id = request.query_params.get("AUTH_ID")
-            if auth_id:
-                # Это вызов из iframe Bitrix24, не установка
-                logger.info(f"📥 Bitrix24 iframe call with AUTH_ID, redirecting to portal")
-                portal_domain = request.query_params.get("DOMAIN", settings.BITRIX24_DOMAIN)
-                return RedirectResponse(url=f"https://{portal_domain}/")
+        logger.info(f"📥 Bitrix24 install final: code={bool(code)}, domain={domain}, tokens={bool(access_token)}")
 
-        logger.info(f"📥 Bitrix24 install final: code={code[:20] if code else None}..., domain={domain}")
-
-        if not code:
+        # Проверяем: есть ли токены напрямую (ONAPPINSTALL) или code для обмена
+        if not code and not access_token:
             return HTMLResponse(
                 content="""
                 <html>
                     <head><title>Ошибка установки</title></head>
                     <body>
-                        <h1>Ошибка: отсутствует код авторизации</h1>
-                        <p>Параметр 'code' не был передан Bitrix24.</p>
+                        <h1>Ошибка: отсутствуют данные авторизации</h1>
+                        <p>Bitrix24 не передал ни code, ни токены авторизации.</p>
+                        <p>Проверьте настройки приложения в Bitrix24.</p>
                     </body>
                 </html>
                 """,
@@ -1358,8 +1391,19 @@ def create_app() -> FastAPI:
                 from src.bitrix24_client import Bitrix24Client
                 crm_client = Bitrix24Client()
 
-            # Обмениваем code на токены
-            result = await crm_client.exchange_auth_code(code, target_domain)
+            # Два пути: либо обмен code на токены, либо сохранение токенов напрямую
+            if access_token:
+                # ONAPPINSTALL событие - токены переданы напрямую
+                logger.info(f"💾 Сохранение токенов из ONAPPINSTALL события для {target_domain}")
+                result = await crm_client.save_tokens_directly(
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    domain=target_domain
+                )
+            else:
+                # OAuth code flow - обмениваем code на токены
+                logger.info(f"🔄 Обмен OAuth code на токены для {target_domain}")
+                result = await crm_client.exchange_auth_code(code, target_domain)
 
             if not result.get("success"):
                 error_msg = result.get("error", "Неизвестная ошибка")
