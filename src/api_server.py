@@ -1294,12 +1294,16 @@ def create_app() -> FastAPI:
         # Переменные для токенов (если придут напрямую)
         access_token = None
         refresh_token = None
+        auth_expires = 3600  # По умолчанию 1 час
 
         # Получаем параметры из query string
         if not code:
             code = request.query_params.get("code")
         if not domain:
             domain = request.query_params.get("domain") or request.query_params.get("DOMAIN")
+
+        # Проверяем APP_SID в query параметрах для frame calls
+        app_sid = request.query_params.get("APP_SID")
 
         # Если POST - проверяем form data и auth параметры
         if request.method == "POST":
@@ -1308,27 +1312,57 @@ def create_app() -> FastAPI:
                 form_dict = dict(form_data)
                 logger.info(f"📥 Bitrix24 POST form keys: {list(form_dict.keys())}")
 
+                # Логируем все значения для отладки (маскируем токены)
+                for key, value in form_dict.items():
+                    if 'TOKEN' in key.upper() or 'AUTH' in key.upper() or 'REFRESH' in key.upper():
+                        logger.info(f"   {key} = {str(value)[:20]}...{str(value)[-10:] if len(str(value)) > 30 else ''}")
+                    else:
+                        logger.info(f"   {key} = {value}")
+
                 # Стандартные параметры
                 code = code or form_data.get("code")
                 domain = domain or form_data.get("domain") or form_data.get("DOMAIN")
                 scope = scope or form_data.get("scope")
 
-                # ONAPPINSTALL формат: auth[access_token], auth[refresh_token]
+                # Bitrix24 может передавать токены в разных форматах:
+                # 1. ONAPPINSTALL: auth[access_token], auth[refresh_token]
                 access_token = form_data.get("auth[access_token]")
                 refresh_token = form_data.get("auth[refresh_token]")
 
-                # Также проверяем APP_SID для frame calls
-                app_sid = form_data.get("APP_SID")
+                # 2. Frame placement: AUTH_ID, REFRESH_ID
+                if not access_token:
+                    access_token = form_data.get("AUTH_ID")
+                if not refresh_token:
+                    refresh_token = form_data.get("REFRESH_ID")
+
+                # Получаем SERVER_ENDPOINT если есть
+                server_endpoint = form_data.get("SERVER_ENDPOINT")
+
+                # Получаем AUTH_EXPIRES (время жизни токена в секундах)
+                auth_expires = form_data.get("AUTH_EXPIRES")
+                if auth_expires:
+                    try:
+                        auth_expires = int(auth_expires)
+                    except (ValueError, TypeError):
+                        auth_expires = 3600  # По умолчанию 1 час
+
+                # Также проверяем APP_SID в form data
+                app_sid = app_sid or form_data.get("APP_SID")
 
                 logger.info(
                     f"📥 Bitrix24 parsed: code={bool(code)}, domain={domain}, "
                     f"access_token={bool(access_token)}, refresh_token={bool(refresh_token)}, "
-                    f"app_sid={bool(app_sid)}"
+                    f"app_sid={bool(app_sid)}, server_endpoint={bool(server_endpoint)}"
                 )
 
-                # Если это frame call (APP_SID есть, но нет токенов) - показываем UI
-                if app_sid and not access_token and not code:
-                    logger.info(f"📥 Bitrix24 frame call (APP_SID present), showing app UI")
+                # Если это frame call (APP_SID есть) и есть AUTH_ID - сохраняем токены
+                if app_sid and access_token:
+                    logger.info(f"📥 Bitrix24 frame call с токенами авторизации")
+                    # Продолжаем обработку - токены будут сохранены ниже
+
+                # Если это просто frame call без токенов - показываем UI
+                elif app_sid and not access_token and not code:
+                    logger.info(f"📥 Bitrix24 frame call без токенов, showing app UI")
                     return HTMLResponse(
                         content="""
                         <html>
@@ -1398,7 +1432,8 @@ def create_app() -> FastAPI:
                 result = await crm_client.save_tokens_directly(
                     access_token=access_token,
                     refresh_token=refresh_token,
-                    domain=target_domain
+                    domain=target_domain,
+                    expires_in=auth_expires
                 )
             else:
                 # OAuth code flow - обмениваем code на токены
