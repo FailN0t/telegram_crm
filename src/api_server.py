@@ -1277,7 +1277,7 @@ def create_app() -> FastAPI:
         Установка приложения Bitrix24 (OAuth callback)
 
         Вызывается Bitrix24 при установке локального приложения.
-        Bitrix24 передаёт code и domain в URL параметрах.
+        Bitrix24 передаёт code и domain в URL или POST параметрах.
 
         Flow:
         1. Пользователь нажимает "Установить" в Bitrix24
@@ -1287,7 +1287,38 @@ def create_app() -> FastAPI:
         5. Настраиваем Open Channels (если включено)
         6. Редиректим обратно на портал
         """
-        logger.info(f"📥 Bitrix24 install request: code={code[:20] if code else None}..., domain={domain}")
+        # Логируем входящий запрос для отладки
+        logger.info(f"📥 Bitrix24 install: method={request.method}, query={dict(request.query_params)}")
+
+        # Получаем параметры из query string
+        if not code:
+            code = request.query_params.get("code")
+        if not domain:
+            domain = request.query_params.get("domain")
+        if not scope:
+            scope = request.query_params.get("scope")
+
+        # Если POST - проверяем form data
+        if request.method == "POST" and not code:
+            try:
+                form_data = await request.form()
+                code = code or form_data.get("code")
+                domain = domain or form_data.get("domain")
+                scope = scope or form_data.get("scope")
+                logger.info(f"📥 Bitrix24 install POST form: code={code[:20] if code else None}..., domain={domain}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось прочитать form data: {e}")
+
+        # Также проверяем AUTH_ID для REST событий
+        if not code:
+            auth_id = request.query_params.get("AUTH_ID")
+            if auth_id:
+                # Это вызов из iframe Bitrix24, не установка
+                logger.info(f"📥 Bitrix24 iframe call with AUTH_ID, redirecting to portal")
+                portal_domain = request.query_params.get("DOMAIN", settings.BITRIX24_DOMAIN)
+                return RedirectResponse(url=f"https://{portal_domain}/")
+
+        logger.info(f"📥 Bitrix24 install final: code={code[:20] if code else None}..., domain={domain}")
 
         if not code:
             return HTMLResponse(
