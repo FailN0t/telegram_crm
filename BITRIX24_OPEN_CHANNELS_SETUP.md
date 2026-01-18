@@ -18,86 +18,60 @@
 
 Откройте в браузере:
 ```
-https://ВАШ-ДОМЕН.bitrix24.ru/devops/edit/local/
+https://ВАШ-ДОМЕН.bitrix24.ru/devops/section/standard/
 ```
 
 Или через меню: **Приложения** → **Разработчикам** → **Другое** → **Локальное приложение**
 
 ### 1.2 Заполнение формы приложения
 
+#### Основные настройки
+
 | Поле | Значение |
 |------|----------|
-| **Название** | Telegram MTProto Integration |
-| **Тип** | Серверное приложение |
+| **Название** | Telegram CRM |
+| **Тип приложения** | **Серверное** (обязательно!) |
 
-### 1.3 Права доступа (scope)
+#### URL-адреса
+
+> **КРИТИЧЕСКИ ВАЖНО:** Оба URL должны быть одинаковыми!
+
+| Поле | Значение |
+|------|----------|
+| **Путь вашего обработчика** | `https://ваш-сервер.com/api/bitrix24/install` |
+| **Путь для первоначальной установки** | `https://ваш-сервер.com/api/bitrix24/install` |
+
+**Примеры:**
+- `https://tg.example.com/api/bitrix24/install`
+- `https://crm.mycompany.ru/api/bitrix24/install`
+
+#### Код приложения (Client ID & Secret)
+
+После создания приложения вы получите:
+- **Код приложения (client_id)**: `local.XXXXXXXX.YYYYYYYY`
+- **Ключ приложения (client_secret)**: длинная строка символов
+
+**Скопируйте и сохраните эти данные!**
+
+### 1.3 Права доступа (Scopes)
 
 Отметьте следующие права:
 
-- [x] `imconnector` - Открытые линии (коннекторы)
-- [x] `imopenlines` - Открытые линии
-- [x] `im` - Чат и уведомления
-- [x] `crm` - CRM
-- [x] `user` - Пользователи
-- [x] `placement` - Встройка интерфейса (опционально)
+- ✅ **imconnector** - Открытые линии (коннекторы) - **ОБЯЗАТЕЛЬНО**
+- ✅ **crm** - CRM (для работы с контактами)
+- ✅ **user** - Пользователи (для получения информации о пользователях)
 
-### 1.4 URL-адреса
-
-| Поле | Значение |
-|------|----------|
-| **URL вашего обработчика** | `https://ваш-сервер.com/api/webhook/bitrix24/openlines` |
-| **Redirect URI** | `https://ваш-сервер.com/api/bitrix24/oauth/callback` |
-
-### 1.5 Сохранение и получение ключей
-
-После сохранения скопируйте:
-- **Код приложения (client_id)**: `local.xxxxxxxx.yyyyyyyy`
-- **Ключ приложения (client_secret)**: `zzzzzzzzzzzzzz`
+> Права `imopenlines`, `im`, `placement` опциональны, но рекомендуются для расширенной функциональности.
 
 ---
 
-## Шаг 2: Создание Открытой линии
-
-### 2.1 Переход в Контакт-центр
-
-Откройте в Bitrix24:
-```
-https://ВАШ-ДОМЕН.bitrix24.ru/contact_center/
-```
-
-Или через меню: **CRM** → **Клиенты** → **Контакт-центр**
-
-Альтернативный путь: **CRM** → **Ещё** → **Интеграции** → **Контакт-центр**
-
-### 2.2 Создание линии
-
-1. Нажмите **"Создать открытую линию"**
-2. Заполните настройки:
-
-| Параметр | Рекомендация |
-|----------|-------------|
-| **Название** | Telegram |
-| **Очередь операторов** | Добавьте сотрудников |
-| **Рабочее время** | По желанию |
-| **Автоматические ответы** | По желанию |
-
-3. Нажмите **Сохранить**
-
-### 2.3 Получение ID линии
-
-После сохранения ID линии будет виден:
-- В URL страницы настроек: `...line_id=1`
-- Или через API `/api/bitrix24/openlines/status`
-
----
-
-## Шаг 3: Настройка переменных окружения
+## Шаг 2: Настройка переменных окружения
 
 Добавьте в файл `.env`:
 
 ```bash
 # ============================================
-# Bitrix24 Open Channels Configuration
+# Bitrix24 Configuration
 # ============================================
 
 # CRM провайдер
@@ -105,181 +79,232 @@ CRM_PROVIDER=bitrix24
 
 # Bitrix24 OAuth (данные локального приложения)
 BITRIX24_DOMAIN=ваш-домен.bitrix24.ru
-BITRIX24_CLIENT_ID=local.xxxxxxxx.yyyyyyyy
+BITRIX24_CLIENT_ID=local.XXXXXXXX.YYYYYYYY
 BITRIX24_CLIENT_SECRET=ваш_секретный_ключ
-BITRIX24_REDIRECT_URI=https://ваш-сервер.com/api/bitrix24/oauth/callback
+BITRIX24_REDIRECT_URI=https://ваш-сервер.com/api/bitrix24/install
 
 # Open Channels
 BITRIX24_OPEN_CHANNELS_ENABLED=true
 BITRIX24_CONNECTOR_ID=telegram_mtproto
-BITRIX24_CONNECTOR_NAME=Telegram MTProto
-BITRIX24_LINE_ID=1
+BITRIX24_CONNECTOR_NAME=Telegram CRM
+BITRIX24_LINE_ID=0
 ```
 
 ### Описание переменных
 
-| Переменная | Описание |
-|------------|----------|
-| `BITRIX24_DOMAIN` | Домен вашего портала Bitrix24 (без https://) |
-| `BITRIX24_CLIENT_ID` | Код приложения из Шага 1 |
-| `BITRIX24_CLIENT_SECRET` | Ключ приложения из Шага 1 |
-| `BITRIX24_REDIRECT_URI` | URL для OAuth callback |
-| `BITRIX24_OPEN_CHANNELS_ENABLED` | Включить Open Channels (`true`/`false`) |
-| `BITRIX24_CONNECTOR_ID` | ID коннектора (можно оставить по умолчанию) |
-| `BITRIX24_CONNECTOR_NAME` | Название канала в Bitrix24 |
-| `BITRIX24_LINE_ID` | ID открытой линии из Шага 2 |
+| Переменная | Описание | Пример |
+|------------|----------|--------|
+| `BITRIX24_DOMAIN` | Домен вашего портала Bitrix24 (без `https://`) | `mycompany.bitrix24.ru` |
+| `BITRIX24_CLIENT_ID` | Код приложения из Шага 1 | `local.696d4abc.67109030` |
+| `BITRIX24_CLIENT_SECRET` | Ключ приложения из Шага 1 | `puozvbq230p32qNaN7MP...` |
+| `BITRIX24_REDIRECT_URI` | URL для OAuth callback (тот же что в настройках приложения) | `https://tg.example.com/api/bitrix24/install` |
+| `BITRIX24_OPEN_CHANNELS_ENABLED` | Включить Open Channels | `true` или `false` |
+| `BITRIX24_CONNECTOR_ID` | ID коннектора (уникальный идентификатор) | `telegram_mtproto` |
+| `BITRIX24_CONNECTOR_NAME` | Название канала в Bitrix24 | `Telegram CRM` |
+| `BITRIX24_LINE_ID` | ID открытой линии (0 = основная линия) | `0` |
+
+> **Примечание:** `BITRIX24_LINE_ID=0` означает основную (дефолтную) линию Bitrix24. Если у вас несколько линий, укажите конкретный ID.
 
 ---
 
-## Шаг 4: Запуск и OAuth авторизация
+## Шаг 3: Установка приложения в Bitrix24
 
-### 4.1 Запуск сервера
+### 3.1 Запуск сервера
 
 ```bash
+# Запуск в разработке
 python3 -m src.main
+
+# Или через Docker
+docker-compose up -d
 ```
 
-### 4.2 Прохождение OAuth авторизации
+### 3.2 Установка приложения
 
-1. Откройте в браузере:
+> **ВАЖНО:** После запуска сервера установка происходит автоматически!
+
+1. **Зайдите в ваше приложение в Bitrix24:**
    ```
-   https://ваш-сервер.com/api/bitrix24/oauth/start
+   https://ваш-домен.bitrix24.ru/devops/section/standard/
    ```
 
-2. Вы будете перенаправлены на страницу Bitrix24
+2. **Нажмите "Установить"** на вашем приложении
 
-3. Нажмите **"Разрешить"** для предоставления прав приложению
+3. **Bitrix24 автоматически:**
+   - Отправит токены авторизации на ваш сервер
+   - Зарегистрирует Open Channels коннектор
+   - Активирует коннектор на линии
+   - Зарегистрирует webhook события
 
-4. После успешной авторизации увидите:
-   ```json
-   {
-     "success": true,
-     "message": "Авторизация Bitrix24 успешна! Токены сохранены."
-   }
+4. **Вы увидите страницу подтверждения:**
    ```
+   ✓ Приложение успешно установлено!
+   Telegram CRM готов к работе.
+   ```
+
+### 3.3 Проверка в логах сервера
+
+В логах должны появиться записи:
+
+```
+✅ Bitrix24 приложение установлено для ваш-домен.bitrix24.ru
+✅ Коннектор telegram_mtproto зарегистрирован
+✅ Коннектор активирован на линии 0
+✅ События зарегистрированы
+✅ Open Channels интеграция настроена
+```
 
 ---
 
-## Шаг 5: Регистрация коннектора
+## Шаг 4: Как это работает
 
-### 5.1 Вызов setup endpoint
+### 4.1 Схема интеграции
 
-```bash
-curl -X POST "https://ваш-сервер.com/api/bitrix24/openlines/setup?webhook_url=https://ваш-сервер.com/api/webhook/bitrix24/openlines" \
-  -H "X-API-Key: ваш_api_secret_key"
+```
+┌─────────────────┐                    ┌──────────────────┐                    ┌─────────────────┐
+│                 │    MTProto         │                  │    REST API        │                 │
+│    Telegram     │ ◄──────────────►   │   Ваш сервер     │ ◄──────────────►   │    Bitrix24     │
+│    Клиент       │                    │  (telegram-crm)  │                    │   Open Lines    │
+│                 │                    │                  │                    │                 │
+└─────────────────┘                    └──────────────────┘                    └─────────────────┘
+        │                                      │                                       │
+        │                                      │                                       │
+        ▼                                      ▼                                       ▼
+   1. Клиент пишет              2. Система отправляет                3. Оператор видит
+   сообщение в Telegram         через API в Bitrix24                 чат в карточке
+                                                                      контакта
+        │                                      │                                       │
+        │                                      │                                       │
+        ▼                                      ▼                                       ▼
+   5. Получает ответ            4. Получает webhook                  Оператор отвечает
+   в Telegram                   и отправляет через MTProto            клиенту
 ```
 
-### 5.2 Ожидаемый ответ
+### 4.2 Где видны сообщения из Telegram
 
-```json
+#### В карточках контактов:
+
+1. Откройте **CRM** → **Контакты**
+2. Выберите контакт
+3. В карточке контакта найдите раздел **"Открытые линии"** или **"Чаты"**
+4. Там будет виден коннектор **"Telegram CRM"** с синей иконкой
+5. Все сообщения из Telegram отображаются в этом разделе
+
+#### В общем списке чатов:
+
+1. Откройте **CRM** → **Открытые линии**
+2. Все активные чаты из Telegram будут отображаться в списке
+3. Можно отвечать прямо из этого интерфейса
+
+### 4.3 Связывание Telegram чата с контактом
+
+Чтобы сообщения появились в карточке контакта, нужно связать Telegram чат с контактом в CRM.
+
+**Способ 1: При отправке сообщения через API**
+
+```bash
+POST /api/send-message
 {
-  "connector_registered": true,
-  "connector_activated": true,
-  "events_registered": {
-    "ONIMCONNECTORMESSAGEADD": true,
-    "ONIMCONNECTORLINEJOIN": true
-  }
+  "phone": "+79991234567",
+  "message": "Привет!",
+  "crm_contact_id": "12345"  # ID контакта в Bitrix24
 }
 ```
 
+**Способ 2: Автоматически**
+
+При первом сообщении система создаст связь между Telegram chat_id и контактом.
+
+**Способ 3: Вручную через БД**
+
+```sql
+INSERT INTO chat_mappings (chat_id, crm_contact_id, account_id)
+VALUES (123456789, '12345', 1);
+```
+
 ---
 
-## Шаг 6: Проверка статуса интеграции
+## Шаг 5: Проверка статуса интеграции
 
-### 6.1 Запрос статуса
+### 5.1 Через API
 
 ```bash
 curl "https://ваш-сервер.com/api/bitrix24/openlines/status" \
   -H "X-API-Key: ваш_api_secret_key"
 ```
 
-### 6.2 Пример ответа
+**Ожидаемый ответ:**
 
 ```json
 {
   "enabled": true,
   "connector_id": "telegram_mtproto",
-  "line_id": 1,
+  "line_id": 0,
   "connector_status": {
-    "active": true,
-    "connection": true
-  },
-  "available_lines": [...],
-  "registered_events": [...]
+    "LINE": 0,
+    "CONNECTOR": "telegram_mtproto",
+    "ERROR": false,
+    "CONFIGURED": true,
+    "STATUS": true
+  }
 }
 ```
 
----
+### 5.2 Через логи
 
-## Шаг 7: Тестирование
+```bash
+# Docker
+docker logs telegram-crm-app | grep "Open Channels"
 
-### 7.1 Входящее сообщение (Telegram → Bitrix24)
-
-1. Отправьте сообщение в Telegram с телефона клиента
-2. В Bitrix24 откройте: **CRM** → **Открытые линии**
-3. Должен появиться новый чат с сообщением
-
-### 7.2 Исходящее сообщение (Bitrix24 → Telegram)
-
-1. Ответьте на сообщение в окне чата Bitrix24
-2. Проверьте, что сообщение доставлено в Telegram
-
-### 7.3 Проверка в карточке контакта
-
-1. Откройте карточку контакта в CRM
-2. На вкладке "Чаты" или "Открытые линии" должна быть история переписки
-
----
-
-## Схема работы
-
+# Локальный запуск
+tail -f logs/app.log | grep "Open Channels"
 ```
-┌─────────────────┐                    ┌──────────────────┐                    ┌─────────────────┐
-│                 │    MTProto         │                  │    REST API        │                 │
-│    Telegram     │ ◄──────────────►   │   Ваш сервер     │ ◄──────────────►   │    Bitrix24     │
-│    Клиент       │                    │                  │                    │   Open Lines    │
-│                 │                    │                  │                    │                 │
-└─────────────────┘                    └──────────────────┘                    └─────────────────┘
-        │                                      │                                       │
-        │                                      │                                       │
-        ▼                                      ▼                                       ▼
-   Пишет сообщение              Пересылает в Bitrix24                      Оператор видит чат
-                                через imconnector API                      в карточке клиента
-        │                                      │                                       │
-        │                                      │                                       │
-        ▼                                      ▼                                       ▼
-   Получает ответ               Получает webhook от                       Оператор отвечает
-   в Telegram                   Bitrix24 и отправляет                     клиенту
-                                через MTProto
+
+Должны быть записи:
+```
+✅ Open Channels интеграция настроена
+connector_registered: True
+connector_activated: True
 ```
 
 ---
 
 ## Устранение неполадок
 
-### Проблема: "connector not registered"
+> Подробное руководство по troubleshooting см. в [BITRIX24_TROUBLESHOOTING.md](BITRIX24_TROUBLESHOOTING.md)
 
-**Решение:** Повторно вызовите `/api/bitrix24/openlines/setup`
+### Проблема: Белый экран при установке приложения
 
-### Проблема: "401 Unauthorized" при вызове API
+**Причина:** Возвращается редирект вместо HTML страницы.
+
+**Решение:** Обновите код до последней версии - теперь возвращается HTML страница с подтверждением.
+
+### Проблема: "Ошибка: отсутствуют данные авторизации"
+
+**Причина:** Bitrix24 не передал токены авторизации.
 
 **Решение:**
-1. Проверьте, прошли ли OAuth авторизацию
-2. Повторите авторизацию: `/api/bitrix24/oauth/start`
+1. Проверьте что оба URL в настройках приложения одинаковые
+2. Убедитесь что тип приложения = "Серверное"
+3. Проверьте логи сервера на предмет ошибок
+
+### Проблема: "ICON_REQUIRED" или "NO_PLACEMENT_HANDLER"
+
+**Причина:** Старая версия кода без иконки или placement handler.
+
+**Решение:** Обновите код до последней версии:
+```bash
+git pull origin feature/agent-db-fk-constraints
+docker-compose build app
+docker-compose up -d
+```
 
 ### Проблема: Сообщения не появляются в Bitrix24
 
 **Решение:**
-1. Проверьте `BITRIX24_OPEN_CHANNELS_ENABLED=true`
-2. Проверьте `BITRIX24_LINE_ID` соответствует ID линии
-3. Проверьте логи сервера на ошибки
-
-### Проблема: Ответы из Bitrix24 не доходят в Telegram
-
-**Решение:**
-1. Проверьте webhook URL в настройках приложения
-2. Убедитесь, что сервер доступен по HTTPS
-3. Проверьте логи на входящие webhook события
+1. Проверьте `BITRIX24_OPEN_CHANNELS_ENABLED=true` в `.env`
+2. Проверьте что контакт связан с Telegram чатом (таблица `chat_mappings`)
+3. Проверьте логи на ошибки Bitrix24 API
 
 ---
 
@@ -287,9 +312,8 @@ curl "https://ваш-сервер.com/api/bitrix24/openlines/status" \
 
 | Метод | Endpoint | Описание |
 |-------|----------|----------|
-| GET | `/api/bitrix24/oauth/start` | Начало OAuth авторизации |
-| GET | `/api/bitrix24/oauth/callback` | Callback для OAuth |
-| POST | `/api/bitrix24/openlines/setup` | Настройка коннектора |
+| POST/GET | `/api/bitrix24/install` | Установка приложения (автоматическая OAuth) |
+| GET | `/api/bitrix24/openlines/placement` | UI страница настроек коннектора |
 | GET | `/api/bitrix24/openlines/status` | Статус интеграции |
 | POST | `/api/webhook/bitrix24/openlines` | Webhook от Bitrix24 |
 
@@ -298,15 +322,41 @@ curl "https://ваш-сервер.com/api/bitrix24/openlines/status" \
 ## Безопасность
 
 1. **HTTPS обязателен** - Bitrix24 не отправляет webhook на HTTP
-2. **API ключ** - Используйте `X-API-Key` для защиты endpoints
-3. **Токены** - Хранятся в базе данных, автоматически обновляются
-4. **Права** - Приложение имеет только необходимые права
+2. **Токены хранятся в БД** - Автоматически обновляются при истечении
+3. **Права приложения** - Только необходимые scopes
+4. **Webhook secret** - Опционально можно добавить `BITRIX24_WEBHOOK_SECRET` для проверки подлинности
 
 ---
 
 ## Поддержка
 
 При возникновении проблем:
-1. Проверьте логи сервера: `docker logs telegram-crm`
-2. Проверьте статус: `/api/bitrix24/openlines/status`
-3. Проверьте документацию Bitrix24: https://dev.1c-bitrix.ru/rest_help/
+
+1. **Проверьте логи сервера:**
+   ```bash
+   docker logs -f telegram-crm-app
+   ```
+
+2. **Проверьте статус:**
+   ```bash
+   curl https://ваш-сервер.com/api/bitrix24/openlines/status
+   ```
+
+3. **Изучите troubleshooting:**
+   - [BITRIX24_TROUBLESHOOTING.md](BITRIX24_TROUBLESHOOTING.md)
+
+4. **Документация Bitrix24:**
+   - https://dev.1c-bitrix.ru/rest_help/
+   - https://dev.1c-bitrix.ru/rest_help/scope_im/imconnector/
+
+---
+
+## Changelog
+
+### 2026-01-18
+- ✅ Автоматическая установка при установке приложения в Bitrix24
+- ✅ Поддержка AUTH_ID/REFRESH_ID формата токенов
+- ✅ HTML страница подтверждения вместо редиректа
+- ✅ Иконка Telegram для коннектора
+- ✅ PLACEMENT_HANDLER для настроек коннектора
+- ✅ Автоматическая регистрация и активация коннектора
