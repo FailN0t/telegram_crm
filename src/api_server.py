@@ -1139,10 +1139,14 @@ def create_app() -> FastAPI:
                 body = json.loads(body_bytes.decode("utf-8"))
 
             logger.info("📥 Получен Open Lines webhook от Bitrix24")
+            logger.info(f"📦 Event type: {body.get('event') or body.get('EVENT')}")
+            logger.info(f"📦 Body keys: {list(body.keys())}")
             logger.debug(f"Open Lines body: {body}")
 
             event_type = body.get("event") or body.get("EVENT")
             data = body.get("data") or body.get("DATA") or {}
+
+            logger.info(f"🔍 Обработка события: event_type={event_type}")
 
             # ONIMCONNECTORMESSAGEADD - сообщение от оператора к пользователю
             # Нужно переслать в Telegram
@@ -1232,7 +1236,7 @@ def create_app() -> FastAPI:
                 }
 
             # Другие события
-            logger.debug(f"Необработанное Open Lines событие: {event_type}")
+            logger.warning(f"⚠️ Необработанное Open Lines событие: {event_type}, data keys: {list(data.keys())}")
             return {
                 "success": True,
                 "event": event_type or "unknown",
