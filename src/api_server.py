@@ -1539,12 +1539,14 @@ def create_app() -> FastAPI:
                     logger.warning(f"⚠️ Не удалось настроить Open Channels: {e}")
 
             # Возвращаем HTML страницу с подтверждением (отображается в iframe)
+            # ВАЖНО: вызываем BX24.installFinish() чтобы завершить установку
             return HTMLResponse(
                 content="""
                 <html>
                     <head>
                         <title>Telegram CRM установлен</title>
                         <meta charset="utf-8">
+                        <script src="//api.bitrix24.com/api/v1/"></script>
                         <style>
                             body {
                                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -1556,13 +1558,39 @@ def create_app() -> FastAPI:
                             .success { color: #4CAF50; font-size: 48px; }
                             h1 { color: #333; }
                             p { color: #666; line-height: 1.6; }
+                            .spinner {
+                                border: 4px solid #f3f3f3;
+                                border-top: 4px solid #4CAF50;
+                                border-radius: 50%;
+                                width: 40px;
+                                height: 40px;
+                                animation: spin 1s linear infinite;
+                                margin: 20px auto;
+                            }
+                            @keyframes spin {
+                                0% { transform: rotate(0deg); }
+                                100% { transform: rotate(360deg); }
+                            }
                         </style>
                     </head>
                     <body>
                         <div class="success">✓</div>
                         <h1>Приложение успешно установлено!</h1>
                         <p>Telegram CRM готов к работе.</p>
-                        <p>Используйте API endpoints для отправки сообщений через Telegram.</p>
+                        <div class="spinner" id="spinner"></div>
+                        <p id="status">Завершение установки...</p>
+
+                        <script>
+                            BX24.init(function() {
+                                console.log('Bitrix24 JS SDK initialized, calling installFinish...');
+                                document.getElementById('status').textContent = 'Завершение...';
+
+                                // Завершаем установку - переводим статус в INSTALLED=true
+                                setTimeout(function() {
+                                    BX24.installFinish();
+                                }, 500);
+                            });
+                        </script>
                     </body>
                 </html>
                 """,
