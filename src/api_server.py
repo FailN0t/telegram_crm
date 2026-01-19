@@ -1245,6 +1245,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/bitrix24/openlines/setup", tags=["Bitrix24"])
     async def setup_bitrix24_openlines(
+        request: Request,
         webhook_url: Optional[str] = None,
         api_key: str = Depends(verify_api_key)
     ):
@@ -1270,11 +1271,15 @@ def create_app() -> FastAPI:
             )
 
         try:
+            # Получаем host для формирования полных URL
+            host = request.headers.get('host', 'localhost')
+
             result = await bridge.crm.setup_open_channels(
                 connector_id=settings.BITRIX24_CONNECTOR_ID,
                 connector_name=settings.BITRIX24_CONNECTOR_NAME,
                 webhook_url=webhook_url,
-                line_id=settings.BITRIX24_LINE_ID
+                line_id=settings.BITRIX24_LINE_ID,
+                placement_handler_url=f"https://{host}/api/bitrix24/openlines/placement"
             )
             return result
         except Exception as e:
