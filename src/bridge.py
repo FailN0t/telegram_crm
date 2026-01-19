@@ -648,9 +648,19 @@ class CRMTelegramBridge:
                 logger.info(f"✅ Сообщение переслано в Open Line")
 
                 # Получаем ID сообщения из результата для отправки статусов
+                # Структура ответа: {"DATA": {"RESULT": [{"message": {"id": "XX"}}]}}
                 bitrix_message_id = None
                 if isinstance(result, dict):
-                    bitrix_message_id = result.get("message", {}).get("id") or result.get("message_id")
+                    try:
+                        data = result.get("DATA", {})
+                        results = data.get("RESULT", [])
+                        if results and len(results) > 0:
+                            first_result = results[0]
+                            message_data = first_result.get("message", {})
+                            bitrix_message_id = message_data.get("id")
+                            logger.info(f"🔍 Извлечен message_id из структуры Bitrix24: {bitrix_message_id}")
+                    except (KeyError, IndexError, TypeError) as e:
+                        logger.warning(f"⚠️ Ошибка парсинга message_id: {e}")
 
                 # ВАЖНО: Отправляем статусы доставки и прочтения
                 # Без этого Bitrix24 не будет отправлять ONIMCONNECTORMESSAGEADD для ответов оператора!
