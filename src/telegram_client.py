@@ -57,20 +57,15 @@ class MTProtoClient:
         self.phone_number = phone_number or settings.TELEGRAM_PHONE
         self.session_name = session_name or f"{settings.TELEGRAM_SESSION_NAME}_{account_id}"
         self.bridge = bridge
-        if session_string:
-            self.client = TelegramClient(
-                StringSession(session_string),
-                settings.TELEGRAM_API_ID,
-                settings.TELEGRAM_API_HASH
-            )
-            self._using_string_session = True
-        else:
-            self.client = TelegramClient(
-                self.session_name,
-                settings.TELEGRAM_API_ID,
-                settings.TELEGRAM_API_HASH
-            )
-            self._using_string_session = False
+
+        # ВАЖНО: ВСЕГДА используем StringSession для сохранения в БД
+        # Даже если session_string пустой - создаем пустой StringSession
+        self.client = TelegramClient(
+            StringSession(session_string or ""),
+            settings.TELEGRAM_API_ID,
+            settings.TELEGRAM_API_HASH
+        )
+        self._using_string_session = True
         self.anti_spam = AntiSpamManager(account_id=self.account_id)
         self.me = None
         self._handlers_registered = False
@@ -446,8 +441,31 @@ class MTProtoClient:
             chat_id
         )
 
+        logger.info(f"💾 Сохранение UI сообщения: direction={direction}, chat_id={chat_id}, text={text[:50]}...")
         async with SessionLocal() as session:
             try:
+                # Проверяем наличие chat_mapping
+                from sqlalchemy import select
+                from src.database import ChatMapping
+                result = await session.execute(
+                    select(ChatMapping).filter_by(telegram_chat_id=chat_id)
+                )
+                mapping = result.scalars().first()
+                if not mapping:
+                    logger.warning(f"⚠️ ChatMapping не найден для chat_id={chat_id}, создаем...")
+                    mapping = ChatMapping(
+                        account_id=self.account_id,
+                        telegram_chat_id=chat_id,
+                        telegram_username=username,
+                        telegram_first_name=first_name,
+                        telegram_last_name=last_name,
+                        amocrm_contact_id=0,  # Временный ID, будет обновлен позже
+                        is_active=True
+                    )
+                    session.add(mapping)
+                    await session.flush()
+                    logger.info(f"✅ ChatMapping создан для chat_id={chat_id}")
+
                 history = UiMessageHistory(
                     account_id=self.account_id,
                     chat_id=chat_id,
@@ -464,6 +482,7 @@ class MTProtoClient:
                     media_size=media_size
                 )
                 session.add(history)
+                logger.info(f"✅ UiMessageHistory добавлен в сессию")
 
                 await self._upsert_ui_chat(
                     session,
@@ -479,8 +498,10 @@ class MTProtoClient:
                     increment_unread=increment_unread
                 )
                 await session.commit()
+                logger.info(f"✅ UI сообщение сохранено: direction={direction}, chat_id={chat_id}")
             except Exception as e:
-                logger.warning(f"⚠️ Не удалось сохранить UI историю: {e}")
+                logger.error(f"❌ Не удалось сохранить UI историю: {e}", exc_info=True)
+                await session.rollback()
 
     async def _upsert_ui_chat(
         self,

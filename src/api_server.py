@@ -1111,7 +1111,11 @@ def create_app() -> FastAPI:
         - ONIMCONNECTORMESSAGEUPDATE: сообщение обновлено
         - ONIMCONNECTORMESSAGEDELETE: сообщение удалено
         """
+        logger.info("🌐 POST /api/webhook/bitrix24/openlines вызван")
+        logger.info(f"📋 Headers: {dict(request.headers)}")
+
         if not settings.BITRIX24_OPEN_CHANNELS_ENABLED:
+            logger.warning("⚠️ Open Channels отключены в настройках")
             return {"success": False, "error": "Open Channels disabled"}
 
         # Проверка секрета webhook
