@@ -101,6 +101,7 @@ class Application:
 
                 # Устанавливаем bridge в API сервере и TelegramClientManager
                 set_bridge(self.bridge)
+                logger.info(f"📝 Вызываем telegram_manager.set_bridge(), clients count: {len(self.telegram_manager._clients)}")
                 self.telegram_manager.set_bridge(self.bridge)
                 logger.info("✅ Bridge готов")
             else:
