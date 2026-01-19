@@ -1128,25 +1128,81 @@ def create_app() -> FastAPI:
 
         _ensure_crm_ready()
 
+        def parse_nested_form_data(flat_dict: dict) -> dict:
+            """
+            Преобразует плоский словарь с ключами вида data[KEY][0][nested]
+            в нормальную вложенную структуру.
+
+            Пример:
+            {'data[CONNECTOR]': 'test', 'data[MESSAGES][0][text]': 'hi'}
+            ->
+            {'data': {'CONNECTOR': 'test', 'MESSAGES': [{'text': 'hi'}]}}
+            """
+            import re
+            result = {}
+
+            for key, value in flat_dict.items():
+                # Извлекаем все части пути (ключи и индексы)
+                # data[CONNECTOR] -> ['data', 'CONNECTOR']
+                # data[MESSAGES][0][text] -> ['data', 'MESSAGES', '0', 'text']
+                path = re.findall(r'([^\[\]]+)', key)
+
+                # Навигируемся по структуре
+                current = result
+                for i, part in enumerate(path[:-1]):
+                    # Проверяем следующую часть - число или нет
+                    next_part = path[i + 1]
+                    is_next_index = next_part.isdigit()
+
+                    # Если текущая часть - это число, значит мы уже в массиве
+                    if part.isdigit():
+                        continue  # Пропускаем, массив уже создан
+
+                    # Создаем структуру если её нет
+                    if part not in current:
+                        current[part] = [] if is_next_index else {}
+
+                    # Если следующий элемент - индекс массива
+                    if is_next_index:
+                        idx = int(next_part)
+                        # Расширяем массив
+                        while len(current[part]) <= idx:
+                            current[part].append({})
+                        current = current[part][idx]
+                    else:
+                        current = current[part]
+
+                # Устанавливаем значение
+                final_key = path[-1]
+                if not final_key.isdigit():
+                    current[final_key] = value
+
+            return result
+
         try:
             # Bitrix24 отправляет данные как form-urlencoded
             content_type = request.headers.get("content-type", "")
             if "application/x-www-form-urlencoded" in content_type:
                 form_data = await request.form()
-                body = dict(form_data)
+                flat_body = dict(form_data)
+                # Преобразуем вложенные ключи
+                body = parse_nested_form_data(flat_body)
             else:
                 body_bytes = await request.body()
                 body = json.loads(body_bytes.decode("utf-8"))
 
             logger.info("📥 Получен Open Lines webhook от Bitrix24")
             logger.info(f"📦 Event type: {body.get('event') or body.get('EVENT')}")
-            logger.info(f"📦 Body keys: {list(body.keys())}")
+            logger.info(f"📦 Parsed data keys: {list(body.get('data', {}).keys()) if 'data' in body else 'no data key'}")
             logger.debug(f"Open Lines body: {body}")
 
             event_type = body.get("event") or body.get("EVENT")
             data = body.get("data") or body.get("DATA") or {}
 
             logger.info(f"🔍 Обработка события: event_type={event_type}")
+            logger.info(f"🔍 Data CONNECTOR: {data.get('CONNECTOR')}")
+            logger.info(f"🔍 Data LINE: {data.get('LINE')}")
+            logger.info(f"🔍 Data MESSAGES count: {len(data.get('MESSAGES', []))}")
 
             # ONIMCONNECTORMESSAGEADD - сообщение от оператора к пользователю
             # Нужно переслать в Telegram
