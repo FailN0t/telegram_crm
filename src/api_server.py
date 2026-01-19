@@ -1230,22 +1230,43 @@ def create_app() -> FastAPI:
 
                     # Ставим в очередь на отправку в Telegram
                     account_id = await bridge.telegram.get_default_account_id()
+                    telegram_chat_id = int(chat_id)
                     key = f"openline_msg:{message_id or chat_id}:{hash(message_text)}"
                     payload = {
                         "source": "bitrix24_openline",
-                        "chat_id": int(chat_id),
+                        "chat_id": telegram_chat_id,
                         "message": message_text,
                         "bitrix_message_id": message_id,
                         "line_id": line_id,
                         "account_id": account_id
                     }
 
+                    # Убедимся что mapping существует
+                    from sqlalchemy import select
+                    from src.database import ChatMapping
+                    mapping_result = await db.execute(
+                        select(ChatMapping).filter_by(telegram_chat_id=telegram_chat_id)
+                    )
+                    mapping = mapping_result.scalars().first()
+
+                    if not mapping:
+                        # Создаем временный mapping для этого чата
+                        logger.info(f"📝 Создание mapping для chat_id={telegram_chat_id}")
+                        new_mapping = ChatMapping(
+                            telegram_chat_id=telegram_chat_id,
+                            crm_contact_id=0,  # Будет обновлено позже
+                            account_id=account_id or 1,
+                            source="openline_webhook"
+                        )
+                        db.add(new_mapping)
+                        await db.commit()
+
                     outbox, created = await enqueue_outbox(
                         db,
                         key,
                         account_id or 0,
                         None,
-                        0,  # chat_id хранится в payload
+                        telegram_chat_id,  # Передаем реальный chat_id
                         payload
                     )
 
