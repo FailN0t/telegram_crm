@@ -674,10 +674,11 @@ class CRMTelegramBridge:
                         )
                         logger.info(f"✅ Отправлен статус доставки для message_id={bitrix_message_id}")
 
-                        # Статус прочтения
+                        # Статус прочтения (требует chat_id)
                         await self.crm.send_status_reading(
                             connector_id=settings.BITRIX24_CONNECTOR_ID,
                             line_id=settings.BITRIX24_LINE_ID,
+                            chat_id=str(telegram_chat_id),
                             message_ids=[str(bitrix_message_id)]
                         )
                         logger.info(f"✅ Отправлен статус прочтения для message_id={bitrix_message_id}")
