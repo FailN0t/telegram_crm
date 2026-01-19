@@ -1040,8 +1040,10 @@ class Bitrix24Client:
         result = await self._call_method("imconnector.send.messages", params)
 
         if result and result.get("result"):
-            logger.info("✅ Сообщение отправлено в Open Line")
+            logger.info(f"✅ Сообщение отправлено в Open Line. Ответ Bitrix24: {result}")
             return result["result"]
+        else:
+            logger.warning(f"⚠️ Bitrix24 не вернул успешный результат для Open Line: {result}")
 
         return None
 
