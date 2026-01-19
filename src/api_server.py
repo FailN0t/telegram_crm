@@ -598,8 +598,8 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/ui/auth", tags=["UI"])
-    async def ui_auth(ui_user: dict = Depends(require_ui_auth)):
-        """Страница авторизации"""
+    async def ui_auth():
+        """Страница авторизации (публичный доступ)"""
         auth_path = STATIC_DIR / "auth.html"
         if not auth_path.exists():
             raise HTTPException(status_code=404, detail="UI not found")
