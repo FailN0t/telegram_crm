@@ -105,13 +105,16 @@ class MTProtoClient:
         return None
 
     async def _persist_string_session(self) -> None:
+        logger.info(f"💾 Сохранение session_string для account_id={self.account_id}")
         try:
             session_string = self.client.session.save()
+            logger.info(f"✅ StringSession получен, длина: {len(session_string) if session_string else 0}")
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить StringSession: {e}")
+            logger.error(f"❌ Не удалось получить StringSession: {e}")
             return
 
         if not session_string:
+            logger.warning("⚠️ StringSession пустой, пропускаем сохранение")
             return
 
         async with SessionLocal() as session:
@@ -121,9 +124,11 @@ class MTProtoClient:
                 )
                 account = result.scalars().first()
                 if account:
+                    logger.info(f"📝 Обновление session_string для существующего аккаунта {self.account_id}")
                     account.session_string = session_string
                     account.updated_at = datetime.utcnow()
                 else:
+                    logger.info(f"➕ Создание нового аккаунта {self.account_id} с session_string")
                     account = TelegramAccount(
                         id=self.account_id,
                         phone_number=self.phone_number,
@@ -150,8 +155,9 @@ class MTProtoClient:
                     )
                     session.add(record)
                 await session.commit()
+                logger.info(f"✅ StringSession успешно сохранен в БД для account_id={self.account_id}")
             except Exception as e:
-                logger.warning(f"⚠️ Не удалось записать StringSession в БД: {e}")
+                logger.error(f"❌ Ошибка записи StringSession в БД: {e}", exc_info=True)
 
     async def connect(self):
         """Подключение клиента (без интерактивной авторизации)"""
