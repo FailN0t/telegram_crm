@@ -106,17 +106,42 @@ class MTProtoClient:
 
     async def _persist_string_session(self) -> None:
         logger.info(f"💾 Сохранение session_string для account_id={self.account_id}")
+
+        # Проверка состояния клиента
+        try:
+            is_connected = self.client.is_connected()
+            is_authorized = await self.client.is_user_authorized()
+            logger.info(f"📊 Статус клиента: connected={is_connected}, authorized={is_authorized}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось проверить статус клиента: {e}")
+
+        # Получение StringSession
         try:
             session_string = self.client.session.save()
             logger.info(f"✅ StringSession получен, длина: {len(session_string) if session_string else 0}")
+
+            # Дополнительная диагностика
+            if session_string:
+                logger.info(f"🔍 Первые 50 символов session_string: {session_string[:50]}...")
+            else:
+                logger.error(f"❌ StringSession ПУСТОЙ! Проверка session object:")
+                logger.error(f"   - session type: {type(self.client.session)}")
+                logger.error(f"   - session class: {self.client.session.__class__.__name__}")
+                if hasattr(self.client.session, '_dc_id'):
+                    logger.error(f"   - dc_id: {self.client.session._dc_id}")
+                if hasattr(self.client.session, '_auth_key'):
+                    logger.error(f"   - auth_key exists: {self.client.session._auth_key is not None}")
+
         except Exception as e:
-            logger.error(f"❌ Не удалось получить StringSession: {e}")
+            logger.error(f"❌ Исключение при получении StringSession: {e}", exc_info=True)
             return
 
         if not session_string:
             logger.warning("⚠️ StringSession пустой, пропускаем сохранение")
+            logger.warning("⚠️ ВАЖНО: Это означает что авторизация НЕ будет сохранена!")
             return
 
+        # Сохранение в БД
         async with SessionLocal() as session:
             try:
                 result = await session.execute(
@@ -125,8 +150,10 @@ class MTProtoClient:
                 account = result.scalars().first()
                 if account:
                     logger.info(f"📝 Обновление session_string для существующего аккаунта {self.account_id}")
+                    old_len = len(account.session_string or "")
                     account.session_string = session_string
                     account.updated_at = datetime.utcnow()
+                    logger.info(f"📏 Размер session_string: {old_len} → {len(session_string)}")
                 else:
                     logger.info(f"➕ Создание нового аккаунта {self.account_id} с session_string")
                     account = TelegramAccount(
@@ -139,6 +166,7 @@ class MTProtoClient:
                     )
                     session.add(account)
 
+                # Дублируем в telegram_sessions для совместимости
                 result = await session.execute(
                     select(TelegramSession).filter_by(phone=self.phone_number)
                 )
@@ -146,6 +174,7 @@ class MTProtoClient:
                 if record:
                     record.session_string = session_string
                     record.updated_at = datetime.utcnow()
+                    logger.info(f"📝 Обновлен TelegramSession для {self.phone_number}")
                 else:
                     record = TelegramSession(
                         phone=self.phone_number,
@@ -154,10 +183,24 @@ class MTProtoClient:
                         updated_at=datetime.utcnow()
                     )
                     session.add(record)
+                    logger.info(f"➕ Создан TelegramSession для {self.phone_number}")
+
                 await session.commit()
                 logger.info(f"✅ StringSession успешно сохранен в БД для account_id={self.account_id}")
+
+                # Проверка сохранения
+                result = await session.execute(
+                    select(TelegramAccount).filter_by(id=self.account_id)
+                )
+                check_account = result.scalars().first()
+                if check_account and check_account.session_string:
+                    logger.info(f"✅ Проверка: session_string в БД, длина={len(check_account.session_string)}")
+                else:
+                    logger.error(f"❌ Проверка провалена: session_string НЕ сохранился в БД!")
+
             except Exception as e:
                 logger.error(f"❌ Ошибка записи StringSession в БД: {e}", exc_info=True)
+                await session.rollback()
 
     async def connect(self):
         """Подключение клиента (без интерактивной авторизации)"""

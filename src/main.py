@@ -89,21 +89,24 @@ class Application:
                     logger.warning("⚠️ AmoCRM отключен: нет обязательных настроек")
             
             if settings.OUTBOX_PROCESS_INLINE:
-                # 3. Инициализация Telegram клиента
-                logger.info("📱 Инициализация Telegram клиента...")
+                # 3. Инициализация Telegram manager (без запуска клиентов)
+                logger.info("📱 Инициализация Telegram manager...")
                 self.telegram_manager = TelegramClientManager()
-                await self.telegram_manager.start_all()
-                logger.info("✅ Telegram клиенты готовы")
+                logger.info("✅ Telegram manager создан")
 
-                # 4. Создание Bridge
+                # 4. Создание Bridge (ДО запуска клиентов!)
                 logger.info("🌉 Создание Bridge...")
                 self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
 
                 # Устанавливаем bridge в API сервере и TelegramClientManager
                 set_bridge(self.bridge)
-                logger.info(f"📝 Вызываем telegram_manager.set_bridge(), clients count: {len(self.telegram_manager._clients)}")
                 self.telegram_manager.set_bridge(self.bridge)
-                logger.info("✅ Bridge готов")
+                logger.info("✅ Bridge установлен в telegram_manager")
+
+                # 5. Запуск Telegram клиентов (с уже установленным bridge!)
+                logger.info("📱 Запуск Telegram клиентов с установленным bridge...")
+                await self.telegram_manager.start_all()
+                logger.info(f"✅ Telegram клиенты готовы (clients count: {len(self.telegram_manager._clients)})")
             else:
                 logger.warning(
                     "⚠️ OUTBOX_PROCESS_INLINE=False: Telegram клиент не "
