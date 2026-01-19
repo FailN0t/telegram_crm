@@ -647,6 +647,35 @@ class CRMTelegramBridge:
             if result:
                 logger.info(f"✅ Сообщение переслано в Open Line")
 
+                # Получаем ID сообщения из результата для отправки статусов
+                bitrix_message_id = None
+                if isinstance(result, dict):
+                    bitrix_message_id = result.get("message", {}).get("id") or result.get("message_id")
+
+                # ВАЖНО: Отправляем статусы доставки и прочтения
+                # Без этого Bitrix24 не будет отправлять ONIMCONNECTORMESSAGEADD для ответов оператора!
+                if bitrix_message_id:
+                    try:
+                        # Статус доставки
+                        await self.crm.send_status_delivery(
+                            connector_id=settings.BITRIX24_CONNECTOR_ID,
+                            line_id=settings.BITRIX24_LINE_ID,
+                            message_ids=[str(bitrix_message_id)]
+                        )
+                        logger.info(f"✅ Отправлен статус доставки для message_id={bitrix_message_id}")
+
+                        # Статус прочтения
+                        await self.crm.send_status_reading(
+                            connector_id=settings.BITRIX24_CONNECTOR_ID,
+                            line_id=settings.BITRIX24_LINE_ID,
+                            message_ids=[str(bitrix_message_id)]
+                        )
+                        logger.info(f"✅ Отправлен статус прочтения для message_id={bitrix_message_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось отправить статусы: {e}")
+                else:
+                    logger.warning(f"⚠️ Не удалось извлечь message_id из результата: {result}")
+
                 # Пытаемся привязать чат к контакту CRM (если есть contact_id)
                 if contact_id:
                     # Получаем ID чата из результата (если есть)
