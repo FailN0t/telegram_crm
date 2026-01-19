@@ -1774,8 +1774,8 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/ui/accounts", tags=["UI"])
-    async def ui_accounts(ui_user: dict = Depends(require_ui_auth)):
-        """Список Telegram аккаунтов"""
+    async def ui_accounts():
+        """Список Telegram аккаунтов (публичный доступ для страницы авторизации)"""
         if not bridge or not bridge.telegram:
             raise HTTPException(status_code=503, detail="Telegram not initialized")
         statuses = await bridge.telegram.get_status()
@@ -2846,11 +2846,8 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/ui/auth/request-code", tags=["UI"])
-    async def ui_request_code(
-        request: UiAuthRequest,
-        ui_user: dict = Depends(require_ui_auth)
-    ):
-        """Запрос кода авторизации"""
+    async def ui_request_code(request: UiAuthRequest):
+        """Запрос кода авторизации (публичный доступ)"""
         _, client = await get_client_for_account(request.account_id)
         success, status = await client.request_code(request.phone)
         message = humanize_auth_status(status)
@@ -2862,11 +2859,8 @@ def create_app() -> FastAPI:
         return {"success": success, "status": status, "message": message}
 
     @app.post("/api/ui/auth/submit-code", tags=["UI"])
-    async def ui_submit_code(
-        request: UiAuthCodeRequest,
-        ui_user: dict = Depends(require_ui_auth)
-    ):
-        """Подтверждение кода авторизации"""
+    async def ui_submit_code(request: UiAuthCodeRequest):
+        """Подтверждение кода авторизации (публичный доступ)"""
         _, client = await get_client_for_account(request.account_id)
         success, status = await client.submit_code(
             request.code,
@@ -2881,11 +2875,8 @@ def create_app() -> FastAPI:
         return {"success": success, "status": status, "message": message}
 
     @app.post("/api/ui/auth/submit-password", tags=["UI"])
-    async def ui_submit_password(
-        request: UiAuthPasswordRequest,
-        ui_user: dict = Depends(require_ui_auth)
-    ):
-        """Подтверждение 2FA"""
+    async def ui_submit_password(request: UiAuthPasswordRequest):
+        """Подтверждение 2FA (публичный доступ)"""
         _, client = await get_client_for_account(request.account_id)
         success, status = await client.submit_password(request.password)
         message = humanize_auth_status(status)
@@ -2897,11 +2888,8 @@ def create_app() -> FastAPI:
         return {"success": success, "status": status, "message": message}
 
     @app.post("/api/ui/auth/logout", tags=["UI"])
-    async def ui_logout(
-        account_id: Optional[int] = None,
-        ui_user: dict = Depends(require_ui_auth)
-    ):
-        """Выход из Telegram"""
+    async def ui_logout(account_id: Optional[int] = None):
+        """Выход из Telegram (публичный доступ)"""
         _, client = await get_client_for_account(account_id)
         success, status = await client.logout()
         message = "Сессия очищена" if success else "Ошибка выхода"
