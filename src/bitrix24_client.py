@@ -1262,17 +1262,20 @@ class Bitrix24Client:
 
         results = {}
         for event in events:
+            # ВАЖНО: НЕ передаём auth_type - пусть Bitrix24 сам выберет подходящий метод
+            # auth_type=0 означает токен в URL, но наш endpoint его не проверяет
             result = await self._call_method("event.bind", {
                 "event": event,
-                "handler": handler_url,
-                "auth_type": 0  # Использовать текущую авторизацию
+                "handler": handler_url
+                # auth_type убран - используется стандартная OAuth аутентификация приложения
             })
             success = result is not None and result.get("result")
             results[event] = success
             if success:
                 logger.info(f"✅ Событие {event} зарегистрировано")
             else:
-                logger.warning(f"⚠️ Не удалось зарегистрировать {event}")
+                error_desc = result.get("error_description") if result else "Unknown error"
+                logger.warning(f"⚠️ Не удалось зарегистрировать {event}: {error_desc}")
 
         return results
 
