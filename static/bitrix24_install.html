@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Установка Telegram CRM</title>
+    <script src="//api.bitrix24.com/api/v1/"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .install-container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 500px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        .status {
+            margin: 30px 0;
+            font-size: 18px;
+            color: #666;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .success {
+            color: #4CAF50;
+            font-size: 24px;
+            margin: 20px 0;
+        }
+        .error {
+            color: #f44336;
+            font-size: 16px;
+            margin: 20px 0;
+            padding: 15px;
+            background: #ffebee;
+            border-radius: 6px;
+        }
+        .info {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="install-container">
+        <h1>🚀 Telegram CRM Console</h1>
+        <div class="status" id="status">Завершение установки...</div>
+        <div class="spinner" id="spinner"></div>
+        <div id="message"></div>
+        <div class="info">
+            <p>Приложение позволяет отправлять сообщения через Telegram и интегрировать их с Bitrix24 Open Channels.</p>
+        </div>
+    </div>
+
+    <script>
+        BX24.init(function() {
+            const statusEl = document.getElementById('status');
+            const spinnerEl = document.getElementById('spinner');
+            const messageEl = document.getElementById('message');
+
+            console.log('Bitrix24 JS SDK initialized');
+
+            // Получаем информацию о приложении
+            BX24.callMethod('app.info', {}, function(result) {
+                if (result.error()) {
+                    console.error('Error getting app info:', result.error());
+                    statusEl.textContent = 'Ошибка получения информации о приложении';
+                    spinnerEl.style.display = 'none';
+                    messageEl.innerHTML = '<div class="error">Ошибка: ' + result.error() + '</div>';
+                } else {
+                    const appInfo = result.data();
+                    console.log('App info:', appInfo);
+
+                    statusEl.textContent = 'Приложение установлено!';
+                    spinnerEl.style.display = 'none';
+                    messageEl.innerHTML = '<div class="success">✓ Установка завершена</div>';
+
+                    // Завершаем установку
+                    setTimeout(function() {
+                        console.log('Calling installFinish...');
+                        BX24.installFinish();
+                    }, 1500);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
