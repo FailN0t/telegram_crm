@@ -5,6 +5,7 @@ MTProto Telegram клиент
 
 import os
 import tempfile
+import asyncio
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -27,6 +28,7 @@ from src.logger import logger
 from src.antispam import AntiSpamManager
 from src.redis_client import get_redis
 from src.media_storage import upload_file
+from src.retry_utils import retry_telegram
 from src.database import (
     ChatMapping,
     ChatProfile,
@@ -73,6 +75,10 @@ class MTProtoClient:
         self._session_paths = None
         self._recent_chat_ids: set[int] = set()
 
+        # Lock to prevent race conditions during initialization
+        # Protects: self.me assignment, event handlers registration
+        self._init_lock = asyncio.Lock()
+
     async def _load_string_session(self) -> Optional[str]:
         if (
             settings.TELEGRAM_STRING_SESSION
@@ -115,9 +121,9 @@ class MTProtoClient:
             session_string = self.client.session.save()
             logger.info(f"✅ StringSession получен, длина: {len(session_string) if session_string else 0}")
 
-            # Дополнительная диагностика
+            # Fix #173: НЕ логируем содержимое session_string (утечка секретов)
             if session_string:
-                logger.info(f"🔍 Первые 50 символов session_string: {session_string[:50]}...")
+                logger.info(f"🔍 StringSession валиден (содержимое скрыто для безопасности)")
             else:
                 logger.error(f"❌ StringSession ПУСТОЙ! Проверка session object:")
                 logger.error(f"   - session type: {type(self.client.session)}")
@@ -238,23 +244,38 @@ class MTProtoClient:
             raise
 
     async def _on_authorized(self):
-        """Действия после успешной авторизации"""
-        if not self.me:
-            self.me = await self.client.get_me()
-            logger.info(
-                f"✅ Авторизован как: {self.me.first_name} "
-                f"(@{self.me.username or 'no username'})"
-            )
-            logger.info(f"📱 Телефон: {self.me.phone}")
-            logger.info(f"🆔 User ID: {self.me.id}")
+        """
+        Действия после успешной авторизации.
 
-        if not self._handlers_registered:
-            self.client.add_event_handler(
-                self._handle_incoming_message,
-                events.NewMessage(incoming=True)
-            )
-            self._handlers_registered = True
+        Thread-safe: Uses lock to prevent race conditions during concurrent start() calls.
+        Protects against duplicate event handler registration and multiple get_me() calls.
+        """
+        # CRITICAL SECTION - protected by lock to prevent race conditions
+        async with self._init_lock:
+            # Double-check pattern: verify again after acquiring lock
+            if not self.me:
+                self.me = await self.client.get_me()
+                logger.info(
+                    f"✅ Авторизован как: {self.me.first_name} "
+                    f"(@{self.me.username or 'no username'})"
+                )
+                logger.info(f"📱 Телефон: {self.me.phone}")
+                logger.info(f"🆔 User ID: {self.me.id}")
 
+            if not self._handlers_registered:
+                self.client.add_event_handler(
+                    self._handle_incoming_message,
+                    events.NewMessage(incoming=True)
+                )
+                # MessageRead обработчик отключен - reading status не отправляется
+                # В Bitrix24 будет показываться только "доставлено", без "просмотрено"
+                # self.client.add_event_handler(
+                #     self._handle_message_read,
+                #     events.MessageRead()
+                # )
+                self._handlers_registered = True
+
+        # Session persist can be done outside lock - not critical
         await self._persist_string_session()
         logger.info("✅ MTProto клиент успешно запущен!")
 
@@ -968,22 +989,49 @@ class MTProtoClient:
                 return False, "quiet_hours"
 
         return True, "ok"
-    
+
+    @retry_telegram(log_prefix="Telegram send_message")
+    async def _send_telegram_message_with_retry(self, user: User, message: str):
+        """
+        Low-level Telegram API call with automatic retry on FloodWait and network errors.
+
+        This method is decorated with @retry_telegram to handle:
+        - FloodWaitError: Respects exact wait time from Telegram (up to 5 minutes)
+        - Network errors: Exponential backoff retry
+        - Other RPCError: Re-raised immediately (non-retryable)
+
+        Args:
+            user: Telegram User object
+            message: Message text to send
+
+        Returns:
+            Sent message object from Telethon
+
+        Raises:
+            FloodWaitError: After max retries exhausted
+            RPCError: Non-retryable Telegram errors
+            Network errors: After max retries exhausted
+        """
+        return await self.client.send_message(user, message)
+
     async def send_message_to_user(
         self,
         user: User,
         message: str,
         is_new_chat: Optional[bool] = None,
-        operator_id: Optional[int] = None
+        operator_id: Optional[int] = None,
+        skip_quiet_hours: bool = False
     ) -> Tuple[bool, str]:
         """
         Отправка сообщения пользователю
-        
+
         Args:
             user: User объект получателя
             message: Текст сообщения
             is_new_chat: Первое ли это сообщение пользователю
-            
+            operator_id: ID оператора (если есть)
+            skip_quiet_hours: Пропустить проверку тихих часов (для Open Channels)
+
         Returns:
             (success, message): (успешно ли, сообщение о результате)
         """
@@ -1020,7 +1068,8 @@ class MTProtoClient:
         can_send, reason = await self.anti_spam.try_register_send(
             user.id,
             is_new_chat,
-            operator_id=operator_id
+            operator_id=operator_id,
+            skip_quiet_hours=skip_quiet_hours
         )
         if not can_send:
             logger.warning(f"⚠️ Anti-spam блокировка: {reason}")
@@ -1042,9 +1091,9 @@ class MTProtoClient:
                 f"📤 Отправка сообщения пользователю "
                 f"@{user.username or user.id}"
             )
-            
-            # Отправляем сообщение
-            sent_message = await self.client.send_message(user, message)
+
+            # Отправляем сообщение с автоматическим retry на FloodWait/network errors
+            sent_message = await self._send_telegram_message_with_retry(user, message)
             
             logger.info(
                 f"✅ Сообщение отправлено пользователю "
@@ -1064,17 +1113,17 @@ class MTProtoClient:
             return True, "Успешно отправлено"
             
         except FloodWaitError as e:
-            # Telegram попросил подождать
+            # FloodWait после всех автоматических попыток retry
+            # (retry decorator уже пытался 3 раза с ожиданием)
             wait_time = e.seconds
-            error_msg = f"FloodWait: нужно подождать {wait_time} секунд"
+            error_msg = f"FloodWait после всех retry: нужно подождать {wait_time}s"
             logger.error(f"🚫 {error_msg}")
-            
-            # Критический алерт если ожидание > 5 минут
-            if wait_time > 300:
-                logger.critical(
-                    f"🚨 КРИТИЧЕСКИЙ FloodWait: {wait_time}s! "
-                    f"Снизьте интенсивность отправки!"
-                )
+
+            # Критический алерт - это означает очень высокую нагрузку
+            logger.critical(
+                f"🚨 КРИТИЧЕСКИЙ FloodWait после retry: {wait_time}s! "
+                f"Telegram серьезно ограничивает отправку. Снизьте нагрузку!"
+            )
             await self._store_message(
                 "outbound",
                 user.id,
@@ -1159,7 +1208,45 @@ class MTProtoClient:
         try:
             message = event.message
             sender = await event.get_sender()
-            
+
+            # Извлечь phone (может быть None если пользователь не в контактах)
+            phone_number = getattr(sender, 'phone', None)
+
+            # Если телефона нет - попробовать добавить в контакты для извлечения phone
+            if not phone_number and sender.username:
+                try:
+                    from src.contact_manager import contact_manager
+
+                    logger.info(
+                        f"📞 Телефон не доступен для @{sender.username}, "
+                        f"пробуем добавить в контакты"
+                    )
+
+                    success, phone_number = await contact_manager.add_to_contacts_with_protection(
+                        client=self.client,
+                        telegram_user_id=sender.id,
+                        first_name=sender.first_name or "Клиент",
+                        last_name=sender.last_name,
+                        username=sender.username,
+                        direction='inbound',  # ВХОДЯЩИЙ - безопасно
+                        source='incoming_message'
+                    )
+
+                    if success and phone_number:
+                        logger.info(f"✅ Телефон получен: {phone_number}")
+                    elif success:
+                        logger.info("ℹ️ Контакт добавлен, но телефон скрыт настройками приватности")
+                    else:
+                        logger.warning("⚠️ Не удалось добавить контакт (проверьте лимиты)")
+
+                except Exception as e:
+                    logger.error(
+                        f"❌ Ошибка Contact Manager для @{sender.username}: {e}",
+                        exc_info=True
+                    )
+                    # Продолжаем обработку сообщения БЕЗ телефона
+                    phone_number = None
+
             logger.info(
                 f"📨 Получено сообщение от @{sender.username or sender.id}: "
                 f"{message.text[:50] if message.text else '[медиа]'}..."
@@ -1195,8 +1282,10 @@ class MTProtoClient:
                             user_first_name=sender.first_name or "",
                             user_last_name=sender.last_name,
                             username=sender.username,
+                            phone=phone_number,  # Передаём телефон (может быть None)
                             message_text=message.text or "[медиа]",
-                            message_id=message.id
+                            message_id=message.id,
+                            account_id=self.account_id  # Передаём account_id для multi-account
                         )
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка обработки через Bridge: {e}")
@@ -1212,7 +1301,8 @@ class MTProtoClient:
                         )
                         mapping = result.scalars().first()
 
-                        if mapping:
+                        # Validate mapping.id before creating history (prevent FK constraint violation)
+                        if mapping and mapping.id and mapping.id > 0:
                             history = MessageHistory(
                                 account_id=self.account_id,
                                 chat_mapping_id=mapping.id,
@@ -1230,6 +1320,10 @@ class MTProtoClient:
                                 f"✅ Сообщение сохранено в БД "
                                 f"(contact_id: {mapping.amocrm_contact_id})"
                             )
+                        elif mapping:
+                            logger.error(
+                                f"❌ Cannot create MessageHistory: invalid mapping.id={mapping.id}"
+                            )
                         else:
                             logger.warning(
                                 f"⚠️ Пользователь @{sender.username or sender.id} "
@@ -1240,7 +1334,114 @@ class MTProtoClient:
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки входящего сообщения: {e}")
-    
+
+    async def _handle_message_read(self, event):
+        """Обработка события прочтения сообщений.
+
+        Вызывается когда получатель прочитал наши сообщения в Telegram.
+        Отправляет reading status в Bitrix24 для соответствующих сообщений.
+        """
+        try:
+            # Event содержит информацию о прочитанных сообщениях
+            # event.chat_id - ID чата где сообщения прочитаны
+            # event.max_id - ID последнего прочитанного сообщения
+            # event.inbox - True если прочитаны входящие, False если исходящие
+
+            # Нас интересуют только исходящие сообщения (inbox=False)
+            # т.е. когда получатель прочитал НАШИ сообщения
+            if event.inbox:
+                return
+
+            chat_id = event.chat_id
+            max_id = event.max_id
+
+            logger.info(f"📖 Сообщения прочитаны в чате {chat_id} до message_id {max_id}")
+
+            # Найти непрочитанные сообщения из outbox для этого чата
+            # которые были успешно отправлены и ещё не отмечены как прочитанные
+            async with SessionLocal() as db:
+                from src.database import MessageOutbox
+                from sqlalchemy import and_
+
+                # Получить все непрочитанные сообщения для этого чата
+                # которые связаны с Bitrix24 (имеют bitrix_message_id)
+                result = await db.execute(
+                    select(MessageOutbox).where(
+                        and_(
+                            MessageOutbox.chat_id == chat_id,
+                            MessageOutbox.account_id == self.account_id,
+                            MessageOutbox.status == 'sent',
+                            MessageOutbox.read_at.is_(None),
+                            MessageOutbox.payload['bitrix_message_id'].isnot(None),
+                            MessageOutbox.payload['bitrix_chat_id'].isnot(None)
+                        )
+                    ).order_by(MessageOutbox.id)
+                )
+                unread_messages = result.scalars().all()
+
+                if not unread_messages:
+                    logger.debug(f"Нет непрочитанных сообщений для чата {chat_id}")
+                    return
+
+                logger.info(f"Найдено {len(unread_messages)} непрочитанных сообщений для отправки reading status")
+
+                # Отправить reading status для каждого сообщения
+                if self.bridge and self.bridge.crm:
+                    from src.config import settings
+                    from datetime import datetime
+
+                    for msg in unread_messages:
+                        payload = msg.payload
+                        bitrix_msg_id = payload.get("bitrix_message_id")
+                        bitrix_chat_id = payload.get("bitrix_chat_id")
+                        line_id = payload.get("line_id", 0)
+
+                        if not bitrix_msg_id or not bitrix_chat_id:
+                            continue
+
+                        try:
+                            # Формат согласно документации Bitrix24
+                            messages = [{
+                                "im": {
+                                    "chat_id": str(bitrix_chat_id),
+                                    "message_id": str(bitrix_msg_id)
+                                },
+                                "message": {
+                                    "id": str(bitrix_msg_id)
+                                },
+                                "chat": {
+                                    "id": str(chat_id)
+                                }
+                            }]
+
+                            # Отправить reading status в Bitrix24
+                            reading_result = await self.bridge.crm.send_status_reading(
+                                connector_id=settings.BITRIX24_CONNECTOR_ID,
+                                line_id=line_id,
+                                messages=messages
+                            )
+
+                            # Отметить сообщение как прочитанное в БД
+                            msg.read_at = datetime.utcnow()
+                            await db.commit()
+
+                            logger.info(
+                                f"✅ Reading status отправлен для message_id={bitrix_msg_id}, "
+                                f"chat_id={chat_id}, result={reading_result}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"⚠️ Не удалось отправить reading status для "
+                                f"message_id={bitrix_msg_id}: {e}"
+                            )
+                else:
+                    logger.debug("Bridge или CRM не инициализирован, reading status не отправляется")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки события MessageRead: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     async def run(self):
         """Запуск клиента в режиме ожидания"""
         logger.info("🔄 Клиент работает в режиме ожидания...")

@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ import json
 import hashlib
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select, or_, func
+from sqlalchemy.exc import IntegrityError
 
 from src.config import settings
 from src.logger import logger
@@ -111,6 +113,7 @@ class HealthResponse(BaseModel):
     version: str
     telegram_connected: bool
     database_connected: bool
+    redis_connected: bool = False  # Added in #85
 
 
 class StatsResponse(BaseModel):
@@ -518,6 +521,80 @@ def create_app() -> FastAPI:
     else:
         logger.warning(f"⚠️ Static directory not found: {STATIC_DIR}")
 
+    # CORS middleware (#42)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if settings.DEBUG else [],  # TODO: Configure for production
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID"],
+    )
+
+    # Rate limiting middleware (#37, #132)
+    @app.middleware("http")
+    async def rate_limit_middleware(request: Request, call_next):
+        """Rate limiting for UI auth and health endpoints"""
+        path = request.url.path
+
+        # Rate limit /health endpoint (#132)
+        if path == "/health":
+            client_ip = request.client.host if request.client else "unknown"
+            allowed, count = await check_rate_limit(
+                key=f"health:{client_ip}",
+                limit=60,  # 60 requests
+                window_seconds=60  # per minute
+            )
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many health check requests"},
+                    headers={"Retry-After": "60"}
+                )
+
+        # Rate limit UI auth endpoints (#37)
+        if path.startswith("/api/ui/"):
+            # Extract username from Basic Auth if present
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Basic "):
+                import base64
+                try:
+                    credentials = base64.b64decode(auth_header.split(" ")[1]).decode()
+                    username = credentials.split(":")[0]
+                    allowed, count = await check_rate_limit(
+                        key=f"ui_auth:{username}",
+                        limit=100,  # 100 requests
+                        window_seconds=60  # per minute
+                    )
+                    if not allowed:
+                        return JSONResponse(
+                            status_code=429,
+                            content={"detail": "Too many requests"},
+                            headers={"Retry-After": "60"}
+                        )
+                except Exception:
+                    pass  # Invalid auth header, let it be handled by auth check
+
+        return await call_next(request)
+
+    # Correlation ID middleware (#82)
+    @app.middleware("http")
+    async def correlation_id_middleware(request: Request, call_next):
+        """Add correlation ID to request for tracing"""
+        import uuid
+        correlation_id = request.headers.get("X-Request-ID") or request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+
+        # Add to request state for logging
+        request.state.correlation_id = correlation_id
+
+        response = await call_next(request)
+
+        # Add to response headers
+        response.headers["X-Request-ID"] = correlation_id
+        response.headers["X-Correlation-ID"] = correlation_id
+
+        return response
+
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
         if not settings.ENABLE_METRICS:
@@ -681,25 +758,38 @@ def create_app() -> FastAPI:
             statuses = await bridge.telegram.get_status()
             telegram_connected = any(item.get("connected") for item in statuses)
 
-        status = "healthy" if (db_connected and telegram_connected) else "degraded"
+        # Check Redis connection (#85)
+        redis_connected = False
+        try:
+            from src.redis_client import get_redis
+            redis = await get_redis()
+            if redis:
+                await redis.ping()
+                redis_connected = True
+        except Exception:
+            redis_connected = False
+
+        status = "healthy" if (db_connected and telegram_connected and redis_connected) else "degraded"
         return {
             "status": status,
             "telegram_connected": telegram_connected,
-            "database_connected": db_connected
+            "database_connected": db_connected,
+            "redis_connected": redis_connected
         }
     
     @app.get("/health", response_model=HealthResponse, tags=["Monitoring"])
     async def health_check(db: AsyncSession = Depends(get_db)):
         """
         Health check endpoint
-        Проверяет подключение к БД и Telegram
+        Проверяет подключение к БД, Redis и Telegram
         """
         status = await _check_health(db)
         return {
             "status": status["status"],
             "version": settings.APP_VERSION,
             "telegram_connected": status["telegram_connected"],
-            "database_connected": status["database_connected"]
+            "database_connected": status["database_connected"],
+            "redis_connected": status.get("redis_connected", False)
         }
 
     @app.get("/metrics", tags=["Monitoring"])
@@ -858,25 +948,30 @@ def create_app() -> FastAPI:
             payload_hash = hashlib.sha256(body_bytes).hexdigest()
             idempotency_key = f"amocrm:{payload_hash}"
 
-            result = await db.execute(
-                select(MessageInbox).filter_by(idempotency_key=idempotency_key)
-            )
-            existing = result.scalars().first()
-            if existing:
+            # ATOMIC idempotency check using INSERT + catch IntegrityError
+            db.add(MessageInbox(
+                idempotency_key=idempotency_key,
+                source="amocrm_webhook",
+                payload_hash=payload_hash
+            ))
+
+            try:
+                await db.commit()
+            except IntegrityError:
+                # Duplicate webhook - already processed
+                await db.rollback()
                 return {
                     "success": True,
                     "processed": 0,
                     "status": "duplicate"
                 }
 
-            db.add(MessageInbox(
-                idempotency_key=idempotency_key,
-                source="amocrm_webhook",
-                payload_hash=payload_hash
-            ))
-            await db.commit()
+            try:  # Added JSON parsing protection (#26)
+                body = json.loads(body_bytes.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.error(f"❌ Invalid JSON in webhook: {e}")
+                raise HTTPException(status_code=400, detail="Invalid JSON")
 
-            body = json.loads(body_bytes.decode("utf-8"))
             logger.info(f"📥 Получен webhook от AmoCRM")
             logger.debug(f"Webhook body: {body}")
             
@@ -917,7 +1012,7 @@ def create_app() -> FastAPI:
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки webhook: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
     @app.post("/api/webhook/bitrix24", tags=["Webhooks"])
     async def bitrix24_webhook(
@@ -946,30 +1041,34 @@ def create_app() -> FastAPI:
                 body = dict(form_data)
             else:
                 body_bytes = await request.body()
-                body = json.loads(body_bytes.decode("utf-8"))
+                try:  # Added JSON parsing protection (#26)
+                    body = json.loads(body_bytes.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    logger.error(f"❌ Invalid JSON in Bitrix24 webhook: {e}")
+                    raise HTTPException(status_code=400, detail="Invalid JSON")
 
             # Вычисляем hash для идемпотентности
             body_str = json.dumps(body, sort_keys=True)
             payload_hash = hashlib.sha256(body_str.encode()).hexdigest()
             idempotency_key = f"bitrix24:{payload_hash}"
 
-            result = await db.execute(
-                select(MessageInbox).filter_by(idempotency_key=idempotency_key)
-            )
-            existing = result.scalars().first()
-            if existing:
-                return {
-                    "success": True,
-                    "processed": 0,
-                    "status": "duplicate"
-                }
-
+            # ATOMIC idempotency check using INSERT + catch IntegrityError
             db.add(MessageInbox(
                 idempotency_key=idempotency_key,
                 source="bitrix24_webhook",
                 payload_hash=payload_hash
             ))
-            await db.commit()
+
+            try:
+                await db.commit()
+            except IntegrityError:
+                # Duplicate webhook - already processed
+                await db.rollback()
+                return {
+                    "success": True,
+                    "processed": 0,
+                    "status": "duplicate"
+                }
 
             logger.info("📥 Получен webhook от Bitrix24")
             logger.debug(f"Webhook body: {body}")
@@ -1041,7 +1140,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки Bitrix24 webhook: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
     @app.get("/api/bitrix24/openlines/placement", tags=["Bitrix24"])
     async def bitrix24_openlines_placement(request: Request):
@@ -1189,7 +1288,11 @@ def create_app() -> FastAPI:
                 body = parse_nested_form_data(flat_body)
             else:
                 body_bytes = await request.body()
-                body = json.loads(body_bytes.decode("utf-8"))
+                try:  # Added JSON parsing protection (#26)
+                    body = json.loads(body_bytes.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    logger.error(f"❌ Invalid JSON in Open Lines webhook: {e}")
+                    raise HTTPException(status_code=400, detail="Invalid JSON")
 
             logger.info("📥 Получен Open Lines webhook от Bitrix24")
             logger.info(f"📦 Event type: {body.get('event') or body.get('EVENT')}")
@@ -1209,7 +1312,7 @@ def create_app() -> FastAPI:
             if event_type == "ONIMCONNECTORMESSAGEADD":
                 messages = data.get("MESSAGES", [])
                 connector = data.get("CONNECTOR", "")
-                line_id = data.get("LINE", 0)
+                line_id = int(data.get("LINE", 0)) if data.get("LINE") else 0
 
                 # Проверяем что это наш коннектор
                 if connector != settings.BITRIX24_CONNECTOR_ID:
@@ -1220,16 +1323,48 @@ def create_app() -> FastAPI:
                 for msg in messages:
                     chat_info = msg.get("chat", {})
                     message_info = msg.get("message", {})
+                    im_info = msg.get("im", {})
+
+                    logger.info(f"🔍 Message structure: msg keys={list(msg.keys())}")
+                    logger.info(f"🔍 Full msg={msg}")
 
                     chat_id = chat_info.get("id")  # Это telegram chat_id
                     message_text = message_info.get("text", "")
-                    message_id = message_info.get("id")
+                    # message_id может быть в разных местах структуры Bitrix24
+                    message_id = (
+                        message_info.get("id") or
+                        im_info.get("message_id") or
+                        im_info.get("id") or
+                        msg.get("id")
+                    )
+
+                    logger.info(f"🔍 Extracted: chat_id={chat_id}, message_id={message_id}, text={message_text[:50] if message_text else 'empty'}...")
 
                     if not chat_id or not message_text:
                         continue
 
+                    # Очистка BB-code тегов от Bitrix24
+                    import re
+                    # Удаляем префикс вида "[b]email@domain.com:[/b] [br]"
+                    message_text = re.sub(r'\[b\][^@]+@[^:]+:\[/b\]\s*\[br\]', '', message_text)
+                    # Удаляем остальные BB-code теги
+                    message_text = re.sub(r'\[/?b\]|\[/?i\]|\[/?u\]|\[br\]', '', message_text)
+                    message_text = message_text.strip()
+
+                    logger.info(f"🧹 После очистки BB-code: {message_text[:50] if message_text else 'empty'}...")
+
                     # Ставим в очередь на отправку в Telegram
-                    account_id = await bridge.telegram.get_default_account_id()
+                    # Получаем default account_id напрямую из БД
+                    if bridge and bridge.telegram:
+                        account_id = await bridge.telegram.get_default_account_id()
+                    else:
+                        # Если bridge не инициализирован (inline mode off), берем первый аккаунт
+                        from sqlalchemy import select
+                        from src.database import TelegramAccount
+                        result = await db.execute(select(TelegramAccount).order_by(TelegramAccount.id).limit(1))
+                        first_account = result.scalars().first()
+                        account_id = first_account.id if first_account else 1
+
                     telegram_chat_id = int(chat_id)
                     key = f"openline_msg:{message_id or chat_id}:{hash(message_text)}"
                     payload = {
@@ -1237,12 +1372,12 @@ def create_app() -> FastAPI:
                         "chat_id": telegram_chat_id,
                         "message": message_text,
                         "bitrix_message_id": message_id,
+                        "bitrix_chat_id": im_info.get("chat_id"),  # ID чата в Bitrix24
                         "line_id": line_id,
                         "account_id": account_id
                     }
 
                     # Убедимся что mapping существует
-                    from sqlalchemy import select
                     from src.database import ChatMapping
                     mapping_result = await db.execute(
                         select(ChatMapping).filter_by(telegram_chat_id=telegram_chat_id)
@@ -1322,7 +1457,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки Open Lines webhook: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
     @app.post("/api/bitrix24/openlines/setup", tags=["Bitrix24"])
     async def setup_bitrix24_openlines(
@@ -1365,7 +1500,7 @@ def create_app() -> FastAPI:
             return result
         except Exception as e:
             logger.error(f"❌ Ошибка настройки Open Channels: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
     @app.get("/api/bitrix24/openlines/status", tags=["Bitrix24"])
     async def get_bitrix24_openlines_status(
@@ -1406,7 +1541,7 @@ def create_app() -> FastAPI:
             }
         except Exception as e:
             logger.error(f"❌ Ошибка получения статуса Open Channels: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
     @app.api_route("/api/bitrix24/install", methods=["GET", "POST"], tags=["Bitrix24"])
     async def bitrix24_install_app(
@@ -1892,12 +2027,34 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/ui/accounts", tags=["UI"])
-    async def ui_accounts():
-        """Список Telegram аккаунтов (публичный доступ для страницы авторизации)"""
+    async def ui_accounts(ui_user: dict = Depends(require_ui_auth)):
+        """
+        Список Telegram аккаунтов.
+
+        Fix #171: Требует авторизацию, маскирует телефонные номера.
+        """
         if not bridge or not bridge.telegram:
             raise HTTPException(status_code=503, detail="Telegram not initialized")
         statuses = await bridge.telegram.get_status()
         default_id = await bridge.telegram.get_default_account_id()
+
+        # Fix #171: Mask phone numbers for security
+        def mask_phone(phone: str) -> str:
+            """Mask middle digits: +7***1234 instead of +71234567890"""
+            if not phone:
+                return "***"
+            if len(phone) < 8:
+                return "***"
+            return phone[:2] + "***" + phone[-4:]
+
+        # Mask phone numbers in statuses
+        for status in statuses:
+            if "phone_number" in status:
+                status["phone_number"] = mask_phone(status.get("phone_number", ""))
+            # Also mask in user object if present
+            if "user" in status and status["user"] and "phone" in status["user"]:
+                status["user"]["phone"] = mask_phone(status["user"].get("phone", ""))
+
         return {"accounts": statuses, "default_account_id": default_id}
 
     @app.get("/api/ui/events", tags=["UI"])
@@ -2653,6 +2810,53 @@ def create_app() -> FastAPI:
                 "created_at": row.created_at.isoformat() + "Z" if row.created_at else None
             })
         return {"audit": items}
+
+    @app.get("/api/admin/contact-health", tags=["Admin"])
+    async def admin_contact_health(
+        ui_user: dict = Depends(require_admin)
+    ):
+        """
+        Health check for Contact Manager system.
+
+        Returns circuit breaker state, rate limits configuration,
+        and statistics for the last hour and last day.
+
+        Used for monitoring the phone extraction system and preventing
+        Telegram account bans.
+
+        Requires admin role.
+        """
+        from src.monitoring import ContactAddMonitor
+        from src.contact_manager import contact_manager
+
+        health = await ContactAddMonitor.check_health()
+
+        return {
+            "circuit_breaker": {
+                "state": contact_manager.circuit_breaker._state,
+                "failure_count": contact_manager.circuit_breaker._failure_count,
+                "cooldown_until": (
+                    contact_manager.circuit_breaker._cooldown_until.isoformat() + "Z"
+                    if contact_manager.circuit_breaker._cooldown_until
+                    else None
+                ),
+                "recent_adds_count": len(contact_manager.circuit_breaker._recent_adds),
+                "max_burst": contact_manager.circuit_breaker.MAX_BURST,
+                "max_failures": contact_manager.circuit_breaker.MAX_FAILURES,
+                "cooldown_seconds": contact_manager.circuit_breaker.COOLDOWN_SECONDS
+            },
+            "limits": {
+                "inbound": {
+                    "per_hour": contact_manager.INBOUND_MAX_PER_HOUR,
+                    "per_day": contact_manager.INBOUND_MAX_PER_DAY
+                },
+                "outbound": {
+                    "per_hour": contact_manager.OUTBOUND_MAX_PER_HOUR,
+                    "per_day": contact_manager.OUTBOUND_MAX_PER_DAY
+                }
+            },
+            "health": health
+        }
 
     @app.get("/api/ui/operators", tags=["UI"])
     async def ui_operators(
