@@ -10,6 +10,7 @@ import aiohttp
 
 from src.config import settings
 from src.logger import logger
+from src.retry_utils import retry_async, CRM_API_RETRY
 
 
 class AmoCRMClient:
@@ -35,7 +36,10 @@ class AmoCRMClient:
                 self.token_expires_at = None
         
         self.base_url = f'https://{self.domain}/api/v4'
-        
+
+        # Fix #14: Lock для предотвращения race condition при refresh токенов
+        self._token_refresh_lock = asyncio.Lock()
+
         logger.info(f"🔗 AmoCRM клиент инициализирован для домена: {self.domain}")
 
     async def _save_tokens(self) -> None:
@@ -55,17 +59,67 @@ class AmoCRMClient:
         except Exception as exc:
             logger.warning("⚠️ Не удалось сохранить AmoCRM токены: %s", exc)
 
+    @retry_async(config=CRM_API_RETRY, log_prefix="AmoCRM API")
+    async def _make_request(
+        self,
+        session: aiohttp.ClientSession,
+        method: str,
+        url: str,
+        return_json: bool = True,
+        **kwargs
+    ) -> tuple[int, any]:
+        """
+        Make HTTP request with retry logic for 429 and 5xx errors.
+
+        Args:
+            session: aiohttp ClientSession
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Request URL
+            return_json: If True, return JSON data; otherwise return text
+            **kwargs: Additional arguments for aiohttp request
+
+        Returns:
+            Tuple of (status_code, data) where data is JSON dict or text string
+
+        Raises:
+            ClientResponseError: For non-retryable errors (4xx except 429)
+        """
+        async with session.request(method, url, **kwargs) as response:
+            # Raise exception for 4xx/5xx errors (will be caught by retry decorator)
+            response.raise_for_status()
+
+            # Read response data before exiting context manager
+            if return_json:
+                data = await response.json()
+            else:
+                data = await response.text()
+
+            return response.status, data
+
     async def ensure_token_valid(self):
-        """Проверка и обновление токена если необходимо"""
+        """
+        Проверка и обновление токена если необходимо.
+        Fix #14: Использует double-checked locking для предотвращения race condition.
+        """
         if not self.access_token or not self.refresh_token:
             logger.warning("⚠️ Токены AmoCRM не настроены!")
             return False
-        
-        # Если токен истекает в течение 5 минут - обновляем
-        if self.token_expires_at and datetime.now() > (self.token_expires_at - timedelta(minutes=5)):
+
+        # Fast path: проверка без lock (оптимизация для частого случая)
+        if self.token_expires_at and datetime.now() <= (self.token_expires_at - timedelta(minutes=5)):
+            return True
+
+        # Slow path: токен истекает, нужен refresh с lock
+        async with self._token_refresh_lock:
+            # Double-check: другой поток мог уже обновить токен пока мы ждали lock
+            if self.token_expires_at and datetime.now() <= (self.token_expires_at - timedelta(minutes=5)):
+                logger.debug("✅ Токен уже обновлен другим потоком")
+                return True
+
+            # Действительно нужен refresh
             logger.info("🔄 Токен истекает, обновляем...")
             return await self.refresh_access_token()
-        
+
         return True
     
     async def refresh_access_token(self) -> bool:
@@ -149,19 +203,19 @@ class AmoCRMClient:
     async def find_contact_by_phone(self, phone: str) -> Optional[Dict]:
         """
         Поиск контакта по номеру телефона
-        
+
         Args:
             phone: Номер телефона
-            
+
         Returns:
             Dict с данными контакта или None
         """
         if not await self.ensure_token_valid():
             return None
-        
+
         try:
             logger.info(f"🔍 Поиск контакта в AmoCRM по телефону: {phone}")
-            
+
             async with aiohttp.ClientSession() as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
@@ -169,31 +223,33 @@ class AmoCRMClient:
                 params = {
                     'query': phone,
                 }
-                
-                async with session.get(
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, data = await self._make_request(
+                    session,
+                    'GET',
                     f'{self.base_url}/contacts',
                     headers=headers,
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        contacts = data.get('_embedded', {}).get('contacts', [])
-                        
-                        if contacts:
-                            contact = contacts[0]
-                            logger.info(
-                                f"✅ Найден контакт: {contact.get('name')} "
-                                f"(ID: {contact['id']})"
-                            )
-                            return contact
-                        else:
-                            logger.warning(f"⚠️ Контакт с телефоном {phone} не найден")
-                            return None
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Ошибка поиска контакта: {error_text}")
-                        return None
-                        
+                    params=params,
+                    return_json=True
+                )
+
+                contacts = data.get('_embedded', {}).get('contacts', [])
+
+                if contacts:
+                    contact = contacts[0]
+                    logger.info(
+                        f"✅ Найден контакт: {contact.get('name')} "
+                        f"(ID: {contact['id']})"
+                    )
+                    return contact
+                else:
+                    logger.warning(f"⚠️ Контакт с телефоном {phone} не найден")
+                    return None
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при поиске контакта (status {e.status}): {e}")
+            return None
         except Exception as e:
             logger.error(f"❌ Исключение при поиске контакта: {e}")
             return None
@@ -201,37 +257,39 @@ class AmoCRMClient:
     async def find_contact_by_id(self, contact_id: int) -> Optional[Dict]:
         """
         Получение контакта по ID
-        
+
         Args:
             contact_id: ID контакта в AmoCRM
-            
+
         Returns:
             Dict с данными контакта или None
         """
         if not await self.ensure_token_valid():
             return None
-        
+
         try:
             logger.info(f"🔍 Получение контакта ID: {contact_id}")
-            
+
             async with aiohttp.ClientSession() as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                 }
-                
-                async with session.get(
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, contact = await self._make_request(
+                    session,
+                    'GET',
                     f'{self.base_url}/contacts/{contact_id}',
-                    headers=headers
-                ) as response:
-                    if response.status == 200:
-                        contact = await response.json()
-                        logger.info(f"✅ Контакт получен: {contact.get('name')}")
-                        return contact
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Ошибка получения контакта: {error_text}")
-                        return None
-                        
+                    headers=headers,
+                    return_json=True
+                )
+
+                logger.info(f"✅ Контакт получен: {contact.get('name')}")
+                return contact
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при получении контакта (status {e.status}): {e}")
+            return None
         except Exception as e:
             logger.error(f"❌ Исключение при получении контакта: {e}")
             return None
@@ -268,30 +326,30 @@ class AmoCRMClient:
     ) -> bool:
         """
         Обновление custom поля контакта
-        
+
         Args:
             contact_id: ID контакта
             field_id: ID custom поля
             value: Новое значение
-            
+
         Returns:
             bool: Успешно ли обновлено
         """
         if not await self.ensure_token_valid():
             return False
-        
+
         try:
             logger.info(
                 f"📝 Обновление поля {field_id} контакта {contact_id} "
                 f"на значение: {value}"
             )
-            
+
             async with aiohttp.ClientSession() as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                     'Content-Type': 'application/json',
                 }
-                
+
                 data = {
                     'custom_fields_values': [
                         {
@@ -304,20 +362,23 @@ class AmoCRMClient:
                         }
                     ]
                 }
-                
-                async with session.patch(
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, response_data = await self._make_request(
+                    session,
+                    'PATCH',
                     f'{self.base_url}/contacts/{contact_id}',
                     headers=headers,
-                    json=data
-                ) as response:
-                    if response.status == 200:
-                        logger.info("✅ Поле успешно обновлено")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Ошибка обновления поля: {error_text}")
-                        return False
-                        
+                    json=data,
+                    return_json=True
+                )
+
+                logger.info("✅ Поле успешно обновлено")
+                return True
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при обновлении поля (status {e.status}): {e}")
+            return False
         except Exception as e:
             logger.error(f"❌ Исключение при обновлении поля: {e}")
             return False
@@ -330,27 +391,27 @@ class AmoCRMClient:
     ) -> bool:
         """
         Создание примечания к контакту
-        
+
         Args:
             contact_id: ID контакта
             text: Текст примечания
             note_type: Тип примечания ('common', 'call', etc.)
-            
+
         Returns:
             bool: Успешно ли создано
         """
         if not await self.ensure_token_valid():
             return False
-        
+
         try:
             logger.info(f"📝 Создание примечания для контакта {contact_id}")
-            
+
             async with aiohttp.ClientSession() as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                     'Content-Type': 'application/json',
                 }
-                
+
                 data = [
                     {
                         'note_type': note_type,
@@ -359,20 +420,23 @@ class AmoCRMClient:
                         }
                     }
                 ]
-                
-                async with session.post(
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, response_data = await self._make_request(
+                    session,
+                    'POST',
                     f'{self.base_url}/contacts/{contact_id}/notes',
                     headers=headers,
-                    json=data
-                ) as response:
-                    if response.status == 200:
-                        logger.info("✅ Примечание создано")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Ошибка создания примечания: {error_text}")
-                        return False
-                        
+                    json=data,
+                    return_json=True
+                )
+
+                logger.info("✅ Примечание создано")
+                return True
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при создании примечания (status {e.status}): {e}")
+            return False
         except Exception as e:
             logger.error(f"❌ Исключение при создании примечания: {e}")
             return False

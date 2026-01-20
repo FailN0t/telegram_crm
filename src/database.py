@@ -5,10 +5,12 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, BigInteger, Boolean, DateTime,
-    Text, Index, JSON, ForeignKey, text, select
+    Text, Index, JSON, ForeignKey, ForeignKeyConstraint, CheckConstraint,
+    text, select, event
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.pool import NullPool
 from typing import AsyncGenerator, Optional
 from src.config import settings
@@ -40,6 +42,14 @@ elif settings.DB_USE_NULL_POOL:
 
 engine = create_async_engine(async_db_url, **engine_options)
 
+# Enable foreign keys for SQLite (required for CASCADE deletes)
+if async_db_url.startswith("sqlite+aiosqlite://"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 # Создание async session
 SessionLocal = async_sessionmaker(
     autocommit=False,
@@ -65,27 +75,34 @@ class ChatMapping(Base):
     )
 
     # Telegram данные
-    telegram_chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    # telegram_chat_id is NOT globally unique (multi-account support)
+    # Unique constraint is on (account_id, telegram_chat_id) - see __table_args__
+    telegram_chat_id = Column(BigInteger, nullable=False, index=True)
     telegram_username = Column(String(255), index=True)
     telegram_first_name = Column(String(255))
     telegram_last_name = Column(String(255))
     phone_number = Column(String(50), index=True)
-    
+
     # AmoCRM данные
-    amocrm_contact_id = Column(Integer, unique=True, nullable=False, index=True)
-    
+    # amocrm_contact_id is NOT globally unique (multi-account support)
+    # Same CRM contact can be mapped to different Telegram accounts
+    amocrm_contact_id = Column(Integer, nullable=False, index=True)
+
     # Статус
     is_active = Column(Boolean, default=True, index=True)
     is_blocked = Column(Boolean, default=False)
     has_consent = Column(Boolean, default=False)
-    
+
     # Метаданные
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_message_at = Column(DateTime)
-    
-    # Индексы
+
+    # Индексы и constraints
     __table_args__ = (
+        # Unique constraint for multi-account: one chat per account
+        Index('idx_chat_mappings_account_chat', 'account_id', 'telegram_chat_id', unique=True),
+        # Regular indexes
         Index('idx_chat_mappings_account_id', 'account_id'),
         Index('idx_chat_mappings_telegram_chat_id', 'telegram_chat_id'),
         Index('idx_chat_mappings_amocrm_contact_id', 'amocrm_contact_id'),
@@ -102,7 +119,7 @@ class TelegramAccount(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     phone_number = Column(String(32), unique=True, nullable=False, index=True)
-    session_string = Column(Text)
+    _session_string_encrypted = Column("session_string", Text)  # Encrypted storage
     label = Column(String(128))
     is_active = Column(Boolean, default=True, index=True)
 
@@ -113,6 +130,47 @@ class TelegramAccount(Base):
         Index('idx_telegram_accounts_phone', 'phone_number'),
         Index('idx_telegram_accounts_active', 'is_active'),
     )
+
+    @hybrid_property
+    def session_string(self) -> Optional[str]:
+        """
+        Get decrypted session string.
+
+        Automatically decrypts the encrypted value from database.
+        Handles backward compatibility with plain text values.
+        """
+        if not self._session_string_encrypted:
+            return None
+
+        from src.crypto import get_session_encryption
+        try:
+            encryptor = get_session_encryption()
+            return encryptor.decrypt(self._session_string_encrypted)
+        except RuntimeError:
+            # Encryption not initialized (e.g., during migrations)
+            # Return as-is for backward compatibility
+            return self._session_string_encrypted
+
+    @session_string.setter
+    def session_string(self, value: Optional[str]) -> None:
+        """
+        Set session string with automatic encryption.
+
+        Encrypts the value before storing in database.
+        If encryption is disabled, stores plain text.
+        """
+        if not value:
+            self._session_string_encrypted = None
+            return
+
+        from src.crypto import get_session_encryption
+        try:
+            encryptor = get_session_encryption()
+            self._session_string_encrypted = encryptor.encrypt(value)
+        except RuntimeError:
+            # Encryption not initialized (e.g., during migrations)
+            # Store as-is for backward compatibility
+            self._session_string_encrypted = value
 
 
 class Operator(Base):
@@ -206,8 +264,6 @@ class ChatProfile(Base):
     )
     telegram_chat_id = Column(
         BigInteger,
-        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
-        unique=True,
         nullable=False,
         index=True
     )
@@ -223,6 +279,16 @@ class ChatProfile(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
+        # Composite FK on (account_id, telegram_chat_id) references chat_mappings
+        # This works because chat_mappings has unique constraint on (account_id, telegram_chat_id)
+        ForeignKeyConstraint(
+            ['account_id', 'telegram_chat_id'],
+            ['chat_mappings.account_id', 'chat_mappings.telegram_chat_id'],
+            ondelete='CASCADE'
+        ),
+        # Unique constraint: one profile per chat
+        Index('idx_chat_profiles_account_chat', 'account_id', 'telegram_chat_id', unique=True),
+        # Regular indexes
         Index('idx_chat_profiles_account_id', 'account_id'),
         Index('idx_chat_profiles_telegram_chat_id', 'telegram_chat_id'),
     )
@@ -249,7 +315,6 @@ class MessageOutbox(Base):
     )
     chat_id = Column(
         BigInteger,
-        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
@@ -257,15 +322,24 @@ class MessageOutbox(Base):
     status = Column(String(32), default="queued", index=True)
     attempts = Column(Integer, default=0)
     next_attempt_at = Column(DateTime)
+    read_at = Column(DateTime, nullable=True)  # Timestamp когда сообщение прочитано получателем
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
+        # Composite FK on (account_id, chat_id) references chat_mappings(account_id, telegram_chat_id)
+        ForeignKeyConstraint(
+            ['account_id', 'chat_id'],
+            ['chat_mappings.account_id', 'chat_mappings.telegram_chat_id'],
+            ondelete='CASCADE'
+        ),
+        # Indexes
         Index('idx_message_outbox_idempotency_key', 'idempotency_key'),
         Index('idx_message_outbox_account_id', 'account_id'),
         Index('idx_message_outbox_operator_id', 'operator_id'),
         Index('idx_message_outbox_chat_id', 'chat_id'),
+        Index('idx_message_outbox_account_chat', 'account_id', 'chat_id'),
         Index('idx_message_outbox_status', 'status'),
         Index('idx_message_outbox_next_attempt_at', 'next_attempt_at'),
         Index('idx_message_outbox_status_next_attempt', 'status', 'next_attempt_at'),
@@ -322,13 +396,51 @@ class TelegramSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     phone = Column(String(32), nullable=False, unique=True, index=True)
-    session_string = Column(Text, nullable=False)
+    _session_string_encrypted = Column("session_string", Text, nullable=False)  # Encrypted storage
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
         Index('idx_telegram_sessions_phone', 'phone'),
     )
+
+    @hybrid_property
+    def session_string(self) -> str:
+        """
+        Get decrypted session string.
+
+        Automatically decrypts the encrypted value from database.
+        Handles backward compatibility with plain text values.
+        """
+        from src.crypto import get_session_encryption
+        try:
+            encryptor = get_session_encryption()
+            return encryptor.decrypt(self._session_string_encrypted) or ""
+        except RuntimeError:
+            # Encryption not initialized (e.g., during migrations)
+            # Return as-is for backward compatibility
+            return self._session_string_encrypted or ""
+
+    @session_string.setter
+    def session_string(self, value: str) -> None:
+        """
+        Set session string with automatic encryption.
+
+        Encrypts the value before storing in database.
+        If encryption is disabled, stores plain text.
+        """
+        if not value:
+            self._session_string_encrypted = ""
+            return
+
+        from src.crypto import get_session_encryption
+        try:
+            encryptor = get_session_encryption()
+            self._session_string_encrypted = encryptor.encrypt(value) or value
+        except RuntimeError:
+            # Encryption not initialized (e.g., during migrations)
+            # Store as-is for backward compatibility
+            self._session_string_encrypted = value
 
 
 class MessageHistory(Base):
@@ -375,7 +487,7 @@ class MessageHistory(Base):
     # Метаданные
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
-    # Индексы
+    # Индексы и ограничения
     __table_args__ = (
         Index('idx_message_history_account_id', 'account_id'),
         Index('idx_message_history_chat_mapping_id', 'chat_mapping_id'),
@@ -383,6 +495,8 @@ class MessageHistory(Base):
         Index('idx_message_history_telegram_chat_id', 'telegram_chat_id'),
         Index('idx_message_history_created_at', 'created_at'),
         Index('idx_message_history_direction', 'direction'),
+        # Fix #117: Prevent chat_mapping_id=0 or negative (invalid FK)
+        CheckConstraint('chat_mapping_id > 0', name='check_message_history_valid_mapping_id'),
     )
 
 
@@ -400,7 +514,6 @@ class UiMessageHistory(Base):
     )
     chat_id = Column(
         BigInteger,
-        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
@@ -419,8 +532,16 @@ class UiMessageHistory(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
     __table_args__ = (
+        # Composite FK on (account_id, chat_id) references chat_mappings(account_id, telegram_chat_id)
+        ForeignKeyConstraint(
+            ['account_id', 'chat_id'],
+            ['chat_mappings.account_id', 'chat_mappings.telegram_chat_id'],
+            ondelete='CASCADE'
+        ),
+        # Indexes
         Index('idx_ui_message_history_account_id', 'account_id'),
         Index('idx_ui_message_history_chat_id', 'chat_id'),
+        Index('idx_ui_message_history_account_chat', 'account_id', 'chat_id'),
         Index('idx_ui_message_history_direction', 'direction'),
         Index('idx_ui_message_history_status', 'status'),
         Index('idx_ui_message_history_created_at', 'created_at'),
@@ -485,8 +606,6 @@ class UiChat(Base):
     )
     chat_id = Column(
         BigInteger,
-        ForeignKey("chat_mappings.telegram_chat_id", ondelete="CASCADE"),
-        unique=True,
         nullable=False,
         index=True
     )
@@ -505,6 +624,15 @@ class UiChat(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
+        # Composite FK on (account_id, chat_id) references chat_mappings(account_id, telegram_chat_id)
+        ForeignKeyConstraint(
+            ['account_id', 'chat_id'],
+            ['chat_mappings.account_id', 'chat_mappings.telegram_chat_id'],
+            ondelete='CASCADE'
+        ),
+        # Unique constraint: one UI chat record per account/chat
+        Index('idx_ui_chats_account_chat', 'account_id', 'chat_id', unique=True),
+        # Regular indexes
         Index('idx_ui_chats_account_id', 'account_id'),
         Index('idx_ui_chats_chat_id', 'chat_id'),
         Index('idx_ui_chats_last_timestamp', 'last_timestamp'),
@@ -515,40 +643,135 @@ class UiChat(Base):
 
 class SendingStatistics(Base):
     """Статистика отправок"""
-    
+
     __tablename__ = "sending_statistics"
-    
+
     id = Column(Integer, primary_key=True, index=True)
-    
+
     # Дата
     date = Column(DateTime, default=datetime.utcnow, index=True)
-    
+
     # Счетчики
     messages_sent = Column(Integer, default=0)
     messages_failed = Column(Integer, default=0)
     new_chats_created = Column(Integer, default=0)
     flood_wait_errors = Column(Integer, default=0)
     privacy_errors = Column(Integer, default=0)
-    
+
     # Средние значения
     avg_response_time = Column(Integer, default=0)  # в миллисекундах
-    
+
     # Метаданные
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     # Индексы
     __table_args__ = (
         Index('idx_sending_statistics_date', 'date'),
     )
 
 
+class ContactAddLog(Base):
+    """
+    Audit log for contact additions to Telegram
+
+    Tracks all attempts to add Telegram users to contacts for phone extraction.
+    Used for rate limiting and monitoring to prevent Telegram account bans.
+    """
+
+    __tablename__ = "contact_add_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # User identification
+    telegram_user_id = Column(BigInteger, nullable=False, index=True)
+
+    # Direction: 'inbound' (customer writes first) or 'outbound' (we write first)
+    direction = Column(String(10), nullable=False, index=True)
+
+    # Source: 'incoming_message', 'crm_request', 'manual_admin', etc.
+    source = Column(String(50), nullable=True)
+
+    # Success/failure tracking
+    success = Column(Boolean, default=False, nullable=False)
+
+    # Timestamp for rate limiting queries
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Indexes for efficient rate limit queries
+    __table_args__ = (
+        Index('idx_contact_add_log_user', 'telegram_user_id'),
+        Index('idx_contact_add_log_direction', 'direction'),
+        Index('idx_contact_add_log_success', 'success'),
+        Index('idx_contact_add_log_created', 'created_at'),
+        # Composite index for rate limit queries (direction + timestamp)
+        Index('idx_contact_add_log_direction_created', 'direction', 'created_at'),
+        # Composite index for checking if user was already added
+        Index('idx_contact_add_log_user_success', 'telegram_user_id', 'success'),
+    )
+
+
+class UiAuthAttempt(Base):
+    """
+    Audit trail for UI magic link authentication attempts
+
+    Fix #169: Tracks all magic link auth attempts for security monitoring.
+    Stores token, success/failure, IP address, user agent for security audit.
+    """
+
+    __tablename__ = "ui_auth_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Magic link token (UUID)
+    token = Column(String(64), nullable=False, index=True, comment="Magic link UUID token")
+
+    # Telegram user ID if known
+    telegram_user_id = Column(BigInteger, nullable=True, comment="Telegram user ID if known")
+
+    # Client information
+    ip_address = Column(String(45), nullable=True, comment="Client IP address")
+    user_agent = Column(Text, nullable=True, comment="Client user agent")
+
+    # Success/failure tracking
+    success = Column(Boolean, nullable=False, comment="Whether auth attempt was successful")
+
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_ui_auth_attempts_token', 'token'),
+        Index('ix_ui_auth_attempts_created_at', 'created_at'),
+    )
+
+
 async def init_db():
     """Инициализация базы данных"""
     async with engine.begin() as conn:
-        if engine.dialect.name == "sqlite" or settings.DB_ALLOW_CREATE_ALL:
+        is_sqlite = engine.dialect.name == "sqlite"
+        is_postgres = engine.dialect.name == "postgresql"
+
+        # SQLite: always allow create_all (for testing)
+        if is_sqlite:
+            logger.info("✅ SQLite detected - creating tables automatically")
             await conn.run_sync(Base.metadata.create_all)
+        # PostgreSQL + DEBUG + DB_ALLOW_CREATE_ALL: allow with warning
+        elif is_postgres and settings.DEBUG and settings.DB_ALLOW_CREATE_ALL:
+            logger.warning(
+                "⚠️ DB_ALLOW_CREATE_ALL=true in DEBUG mode - creating tables. "
+                "This bypasses Alembic migrations! Use 'alembic upgrade head' instead."
+            )
+            await conn.run_sync(Base.metadata.create_all)
+        # PostgreSQL + production: NEVER allow create_all
+        elif is_postgres and settings.DB_ALLOW_CREATE_ALL:
+            raise RuntimeError(
+                "❌ DB_ALLOW_CREATE_ALL=true is NOT allowed in production with PostgreSQL! "
+                "This bypasses Alembic migrations and can cause schema drift. "
+                "Use 'alembic upgrade head' to apply migrations properly."
+            )
+        # PostgreSQL + production: just check connection
         else:
             await conn.execute(text("SELECT 1"))
+
     try:
         await ensure_default_account()
     except Exception as exc:

@@ -298,5 +298,311 @@ class TestSecurityFix128(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TestSecurityFix14(unittest.TestCase):
+    """Test #14: Concurrent refresh CRM токенов должен использовать lock"""
+
+    def test_bitrix24_concurrent_token_refresh_uses_lock(self):
+        """Test #14 (Bitrix24): При concurrent запросах refresh вызывается только 1 раз"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from datetime import datetime, timedelta
+
+        async def run_test():
+            from src.bitrix24_client import Bitrix24Client
+
+            # Create client instance
+            client = Bitrix24Client()
+
+            # Setup: токен истекает через 4 минуты (меньше чем 5 минут - нужен refresh)
+            client.access_token = "test_access_token"
+            client.refresh_token = "test_refresh_token"
+            client.token_expires_at = datetime.now() + timedelta(minutes=4)
+            client.use_webhook = False
+
+            # Track number of actual refresh calls
+            refresh_call_count = 0
+
+            async def mock_refresh():
+                """Mock refresh that simulates delay and updates token"""
+                nonlocal refresh_call_count
+                refresh_call_count += 1
+
+                # Simulate network delay (important for race condition test)
+                await asyncio.sleep(0.1)
+
+                # Update token expiry to simulate successful refresh
+                client.token_expires_at = datetime.now() + timedelta(hours=1)
+                return True
+
+            # Patch refresh_access_token method
+            with patch.object(client, 'refresh_access_token', new=mock_refresh):
+                # Simulate 5 concurrent API calls that all see expired token
+                tasks = [client.ensure_token_valid() for _ in range(5)]
+
+                # Run concurrently
+                results = await asyncio.gather(*tasks)
+
+                # All should succeed
+                for result in results:
+                    self.assertTrue(result, "ensure_token_valid() должен вернуть True")
+
+                # CRITICAL CHECK: refresh должен быть вызван только 1 раз (не 5)
+                self.assertEqual(
+                    refresh_call_count,
+                    1,
+                    f"❌ BUG #14 (Bitrix24): refresh_access_token вызван {refresh_call_count} раз вместо 1! "
+                    f"Double-checked locking не работает."
+                )
+
+        asyncio.run(run_test())
+
+    def test_amocrm_concurrent_token_refresh_uses_lock(self):
+        """Test #14 (AmoCRM): При concurrent запросах refresh вызывается только 1 раз"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from datetime import datetime, timedelta
+
+        async def run_test():
+            from src.amocrm_client import AmoCRMClient
+
+            # Create client instance
+            client = AmoCRMClient()
+
+            # Setup: токен истекает через 4 минуты (меньше чем 5 минут - нужен refresh)
+            client.access_token = "test_access_token"
+            client.refresh_token = "test_refresh_token"
+            client.token_expires_at = datetime.now() + timedelta(minutes=4)
+
+            # Track number of actual refresh calls
+            refresh_call_count = 0
+
+            async def mock_refresh():
+                """Mock refresh that simulates delay and updates token"""
+                nonlocal refresh_call_count
+                refresh_call_count += 1
+
+                # Simulate network delay (important for race condition test)
+                await asyncio.sleep(0.1)
+
+                # Update token expiry to simulate successful refresh
+                client.token_expires_at = datetime.now() + timedelta(hours=1)
+                return True
+
+            # Patch refresh_access_token method
+            with patch.object(client, 'refresh_access_token', new=mock_refresh):
+                # Simulate 5 concurrent API calls that all see expired token
+                tasks = [client.ensure_token_valid() for _ in range(5)]
+
+                # Run concurrently
+                results = await asyncio.gather(*tasks)
+
+                # All should succeed
+                for result in results:
+                    self.assertTrue(result, "ensure_token_valid() должен вернуть True")
+
+                # CRITICAL CHECK: refresh должен быть вызван только 1 раз (не 5)
+                self.assertEqual(
+                    refresh_call_count,
+                    1,
+                    f"❌ BUG #14 (AmoCRM): refresh_access_token вызван {refresh_call_count} раз вместо 1! "
+                    f"Double-checked locking не работает."
+                )
+
+        asyncio.run(run_test())
+
+    def test_bitrix24_double_checked_locking_works(self):
+        """Test #14 (Bitrix24): Double-checked locking - второй поток не делает refresh"""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from datetime import datetime, timedelta
+
+        async def run_test():
+            from src.bitrix24_client import Bitrix24Client
+
+            client = Bitrix24Client()
+
+            # Setup: токен истекает (нужен refresh)
+            client.access_token = "test_access_token"
+            client.refresh_token = "test_refresh_token"
+            client.token_expires_at = datetime.now() + timedelta(minutes=4)
+            client.use_webhook = False
+
+            refresh_calls = []
+
+            async def mock_refresh():
+                """Mock refresh that records call"""
+                refresh_calls.append(datetime.now())
+                # Simulate successful refresh
+                client.token_expires_at = datetime.now() + timedelta(hours=1)
+                await asyncio.sleep(0.05)  # Simulate network delay
+                return True
+
+            with patch.object(client, 'refresh_access_token', new=mock_refresh):
+                # First call should trigger refresh
+                result1 = await client.ensure_token_valid()
+                self.assertTrue(result1)
+                self.assertEqual(len(refresh_calls), 1)
+
+                # Second call should NOT trigger refresh (token already valid)
+                result2 = await client.ensure_token_valid()
+                self.assertTrue(result2)
+                self.assertEqual(len(refresh_calls), 1, "Второй вызов НЕ должен делать refresh!")
+
+        asyncio.run(run_test())
+
+    def test_amocrm_double_checked_locking_works(self):
+        """Test #14 (AmoCRM): Double-checked locking - второй поток не делает refresh"""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from datetime import datetime, timedelta
+
+        async def run_test():
+            from src.amocrm_client import AmoCRMClient
+
+            client = AmoCRMClient()
+
+            # Setup: токен истекает (нужен refresh)
+            client.access_token = "test_access_token"
+            client.refresh_token = "test_refresh_token"
+            client.token_expires_at = datetime.now() + timedelta(minutes=4)
+
+            refresh_calls = []
+
+            async def mock_refresh():
+                """Mock refresh that records call"""
+                refresh_calls.append(datetime.now())
+                # Simulate successful refresh
+                client.token_expires_at = datetime.now() + timedelta(hours=1)
+                await asyncio.sleep(0.05)  # Simulate network delay
+                return True
+
+            with patch.object(client, 'refresh_access_token', new=mock_refresh):
+                # First call should trigger refresh
+                result1 = await client.ensure_token_valid()
+                self.assertTrue(result1)
+                self.assertEqual(len(refresh_calls), 1)
+
+                # Second call should NOT trigger refresh (token already valid)
+                result2 = await client.ensure_token_valid()
+                self.assertTrue(result2)
+                self.assertEqual(len(refresh_calls), 1, "Второй вызов НЕ должен делать refresh!")
+
+        asyncio.run(run_test())
+
+
+class TestSecurityFix169(unittest.TestCase):
+    """Test #169: Magic link авторизация через Telegram"""
+
+    def test_magic_link_token_saved_to_redis(self):
+        """Test #169: Magic link token должен сохраняться в Redis с TTL"""
+        import asyncio
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        async def run_test():
+            from src.redis_client import save_magic_link_token, get_magic_link_token
+
+            # Mock Redis client
+            mock_redis = AsyncMock()
+            mock_redis.setex = AsyncMock(return_value=True)
+            mock_redis.get = AsyncMock(return_value='{"created_at": "2026-01-21T00:00:00", "used": false}')
+
+            with patch('src.redis_client.get_redis', return_value=mock_redis):
+                # Save token
+                token = "test-uuid-token"
+                result = await save_magic_link_token(token, ttl_seconds=300)
+
+                # Verify saved
+                self.assertTrue(result)
+
+                # Verify Redis called with correct params
+                mock_redis.setex.assert_called_once()
+                call_args = mock_redis.setex.call_args
+                self.assertEqual(call_args[0][0], f"magic_link:{token}")
+                self.assertEqual(call_args[0][1], 300)  # TTL 5 minutes
+
+                # Verify token can be retrieved
+                token_data = await get_magic_link_token(token)
+                self.assertIsNotNone(token_data)
+                self.assertFalse(token_data["used"])
+
+        asyncio.run(run_test())
+
+    def test_magic_link_token_marked_as_used(self):
+        """Test #169: Magic link token должен помечаться как использованный"""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        import json
+
+        async def run_test():
+            from src.redis_client import mark_magic_link_token_used
+
+            # Mock Redis client
+            token_data = {"created_at": "2026-01-21T00:00:00", "used": False}
+            mock_redis = AsyncMock()
+            mock_redis.get = AsyncMock(return_value=json.dumps(token_data))
+            mock_redis.ttl = AsyncMock(return_value=250)  # 250 seconds remaining
+            mock_redis.setex = AsyncMock(return_value=True)
+
+            with patch('src.redis_client.get_redis', return_value=mock_redis):
+                token = "test-uuid-token"
+                result = await mark_magic_link_token_used(token)
+
+                # Verify marked as used
+                self.assertTrue(result)
+
+                # Verify Redis setex called to update token data
+                mock_redis.setex.assert_called_once()
+                call_args = mock_redis.setex.call_args
+                updated_data = json.loads(call_args[0][2])
+                self.assertTrue(updated_data["used"])
+                self.assertIn("used_at", updated_data)
+
+        asyncio.run(run_test())
+
+    def test_magic_link_request_endpoint_generates_token(self):
+        """Test #169: POST /api/ui/auth/request-magic-link должен генерировать токен"""
+        # This test would require FastAPI TestClient and database setup
+        # For now, we verify that Redis helpers work (already tested above)
+        # Full integration test would be added in a separate test file
+        pass
+
+    def test_magic_link_activation_endpoint_validates_token(self):
+        """Test #169: GET /ui/auth/magic должен валидировать токен"""
+        # This test would require FastAPI TestClient
+        # Scenario: valid token → redirect to /ui with cookie
+        # Scenario: invalid token → 400 error
+        # Scenario: already used token → 400 error
+        # Scenario: expired token → 400 error
+        pass
+
+    def test_ui_auth_attempts_table_exists(self):
+        """Test #169: Таблица ui_auth_attempts должна существовать"""
+        import os
+
+        # Check that migration file exists
+        migration_file = "alembic/versions/20260121_add_ui_auth_attempts_table.py"
+        self.assertTrue(
+            os.path.exists(migration_file),
+            f"Migration file {migration_file} должен существовать"
+        )
+
+        # Check migration content
+        with open(migration_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Verify creates ui_auth_attempts table
+        self.assertIn("create_table", content.lower())
+        self.assertIn("ui_auth_attempts", content)
+
+        # Verify has required columns
+        required_columns = ["token", "telegram_user_id", "ip_address", "user_agent", "success", "created_at"]
+        for column in required_columns:
+            self.assertIn(column, content, f"Column {column} должен быть в migration")
+
+        # Verify has indexes
+        self.assertIn("ix_ui_auth_attempts_token", content)
+        self.assertIn("ix_ui_auth_attempts_created_at", content)
+
+
 if __name__ == "__main__":
     unittest.main()

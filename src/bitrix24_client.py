@@ -12,6 +12,7 @@ import aiohttp
 
 from src.config import settings
 from src.logger import logger
+from src.retry_utils import retry_async, CRM_API_RETRY
 
 
 class Bitrix24Client:
@@ -46,6 +47,9 @@ class Bitrix24Client:
             self.base_url = f"https://{self.domain}/rest"
             self.use_webhook = False
 
+        # Fix #14: Lock для предотвращения race condition при refresh токенов
+        self._token_refresh_lock = asyncio.Lock()
+
         logger.info(
             f"🔗 Bitrix24 клиент инициализирован: {self.domain} "
             f"(режим: {'webhook' if self.use_webhook else 'oauth'})"
@@ -73,8 +77,48 @@ class Bitrix24Client:
         except Exception as exc:
             logger.warning("⚠️ Не удалось сохранить Bitrix24 токены: %s", exc)
 
+    @retry_async(config=CRM_API_RETRY, log_prefix="Bitrix24 API")
+    async def _make_request(
+        self,
+        session: aiohttp.ClientSession,
+        method: str,
+        url: str,
+        return_json: bool = True,
+        **kwargs
+    ) -> tuple[int, any]:
+        """
+        Make HTTP request with retry logic for 429 and 5xx errors.
+
+        Args:
+            session: aiohttp ClientSession
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Request URL
+            return_json: If True, return JSON data; otherwise return text
+            **kwargs: Additional arguments for aiohttp request
+
+        Returns:
+            Tuple of (status_code, data) where data is JSON dict or text string
+
+        Raises:
+            ClientResponseError: For non-retryable errors (4xx except 429)
+        """
+        async with session.request(method, url, **kwargs) as response:
+            # Raise exception for 4xx/5xx errors (will be caught by retry decorator)
+            response.raise_for_status()
+
+            # Read response data before exiting context manager
+            if return_json:
+                data = await response.json()
+            else:
+                data = await response.text()
+
+            return response.status, data
+
     async def ensure_token_valid(self) -> bool:
-        """Проверка и обновление токена если необходимо"""
+        """
+        Проверка и обновление токена если необходимо.
+        Fix #14: Использует double-checked locking для предотвращения race condition.
+        """
         # В режиме webhook токен не нужен
         if self.use_webhook:
             return True
@@ -83,8 +127,18 @@ class Bitrix24Client:
             logger.warning("⚠️ Токены Bitrix24 не настроены!")
             return False
 
-        # Если токен истекает в течение 5 минут - обновляем
-        if self.token_expires_at and datetime.now() > (self.token_expires_at - timedelta(minutes=5)):
+        # Fast path: проверка без lock (оптимизация для частого случая)
+        if self.token_expires_at and datetime.now() <= (self.token_expires_at - timedelta(minutes=5)):
+            return True
+
+        # Slow path: токен истекает, нужен refresh с lock
+        async with self._token_refresh_lock:
+            # Double-check: другой поток мог уже обновить токен пока мы ждали lock
+            if self.token_expires_at and datetime.now() <= (self.token_expires_at - timedelta(minutes=5)):
+                logger.debug("✅ Токен уже обновлен другим потоком")
+                return True
+
+            # Действительно нужен refresh
             logger.info("🔄 Токен истекает, обновляем...")
             return await self.refresh_access_token()
 
@@ -280,7 +334,7 @@ class Bitrix24Client:
         params: Optional[Dict] = None
     ) -> Optional[Dict]:
         """
-        Универсальный вызов Bitrix24 REST API
+        Универсальный вызов Bitrix24 REST API с retry logic для 429/5xx ошибок
 
         Args:
             method: Название метода (например, "crm.contact.get")
@@ -302,28 +356,30 @@ class Bitrix24Client:
                 url = f"{self.base_url}/{method}?auth={self.access_token}"
 
             async with aiohttp.ClientSession() as session:
-                async with session.post(
+                # Use _make_request with retry logic for 429/5xx errors
+                status, data = await self._make_request(
+                    session,
+                    'POST',
                     url,
                     json=params or {},
-                    headers={"Content-Type": "application/json"}
-                ) as response:
-                    data = await response.json()
+                    headers={"Content-Type": "application/json"},
+                    return_json=True
+                )
 
-                    if response.status == 200:
-                        if "error" in data:
-                            error = data.get("error")
-                            error_desc = data.get("error_description", "")
-                            logger.error(
-                                f"❌ Bitrix24 API ошибка: {error} - {error_desc}"
-                            )
-                            return None
-                        return data
-                    else:
-                        logger.error(
-                            f"❌ Bitrix24 HTTP ошибка {response.status}: {data}"
-                        )
-                        return None
+                # Check for Bitrix24 API error (200 OK but error in response)
+                if "error" in data:
+                    error = data.get("error")
+                    error_desc = data.get("error_description", "")
+                    logger.error(
+                        f"❌ Bitrix24 API ошибка: {error} - {error_desc}"
+                    )
+                    return None
 
+                return data
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при вызове {method} (status {e.status}): {e}")
+            return None
         except Exception as e:
             logger.error(f"❌ Исключение при вызове {method}: {e}")
             return None
@@ -1051,7 +1107,7 @@ class Bitrix24Client:
         self,
         connector_id: str,
         line_id: int,
-        message_ids: List[str]
+        messages: List[Dict[str, Any]]
     ) -> bool:
         """
         Отправка статуса доставки сообщений
@@ -1061,25 +1117,31 @@ class Bitrix24Client:
         Args:
             connector_id: ID коннектора
             line_id: ID линии
-            message_ids: Список ID сообщений
+            messages: Список объектов сообщений с полями:
+                - im: {"chat_id": str, "message_id": str} - IDs в Bitrix24
+                - message: {"id": str} - ID в external system
+                - chat: {"id": str} - chat ID в external system
 
         Returns:
             bool: Успешно ли отправлен статус
         """
-        result = await self._call_method("imconnector.send.status.delivery", {
+        params = {
             "CONNECTOR": connector_id,
             "LINE": line_id,
-            "MESSAGES": [{"id": mid} for mid in message_ids]
-        })
+            "MESSAGES": messages
+        }
+        logger.info(f"🔍 Отправка delivery status в Bitrix24: {params}")
 
+        result = await self._call_method("imconnector.send.status.delivery", params)
+
+        logger.info(f"🔍 Ответ delivery status: {result}")
         return result is not None and result.get("result")
 
     async def send_status_reading(
         self,
         connector_id: str,
         line_id: int,
-        chat_id: str,
-        message_ids: List[str]
+        messages: List[Dict[str, Any]]
     ) -> bool:
         """
         Отправка статуса прочтения сообщений
@@ -1089,19 +1151,28 @@ class Bitrix24Client:
         Args:
             connector_id: ID коннектора
             line_id: ID линии
-            chat_id: ID чата
-            message_ids: Список ID сообщений
+            messages: Список объектов сообщений с полями:
+                - im: {"chat_id": str, "message_id": str} - IDs в Bitrix24
+                - message: {"id": str} - ID в external system
+                - chat: {"id": str} - chat ID в external system
 
         Returns:
             bool: Успешно ли отправлен статус
         """
-        result = await self._call_method("imconnector.send.status.reading", {
+        # CHAT параметр извлекается из первого сообщения для совместимости
+        chat_id = messages[0]["chat"]["id"] if messages and "chat" in messages[0] else None
+
+        params = {
             "CONNECTOR": connector_id,
             "LINE": line_id,
-            "CHAT": {"id": str(chat_id)},
-            "MESSAGES": [{"id": mid} for mid in message_ids]
-        })
+            "CHAT": {"id": str(chat_id)} if chat_id else {},
+            "MESSAGES": messages
+        }
+        logger.info(f"🔍 Отправка reading status в Bitrix24: {params}")
 
+        result = await self._call_method("imconnector.send.status.reading", params)
+
+        logger.info(f"🔍 Ответ reading status: {result}")
         return result is not None and result.get("result")
 
     async def update_user_in_chat(
