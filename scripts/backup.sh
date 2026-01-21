@@ -26,9 +26,8 @@ docker-compose -f docker-compose.production.yml exec -T postgres pg_dump -U "$DB
 echo "📁 Резервная копия session файлов..."
 cp -r sessions "$BACKUP_DIR/"
 
-# Бэкап .env (ОСТОРОЖНО!)
-echo "⚙️ Резервная копия конфигурации..."
-cp .env "$BACKUP_DIR/.env.backup"
+# .env НЕ копируется в бэкап из соображений безопасности (#86)
+# Credentials и secrets должны храниться в secret management системе
 
 # Сжатие
 echo "📦 Сжатие резервной копии..."

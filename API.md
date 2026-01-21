@@ -264,6 +264,62 @@ Audit log admin‑действий.
 - `actor` — фильтр по пользователю
 - `action` — фильтр по действию
 
+### `GET /api/admin/contact-health`
+Мониторинг Contact Manager (Circuit Breaker, rate limits, статистика).
+
+> Требуется Basic Auth с ролью `admin`.
+
+**Ответ**
+```json
+{
+  "circuit_breaker": {
+    "state": "CLOSED",
+    "failure_count": 0,
+    "cooldown_until": null,
+    "recent_adds_count": 2,
+    "max_burst": 5,
+    "max_failures": 3,
+    "cooldown_seconds": 300
+  },
+  "limits": {
+    "inbound": {
+      "per_hour": 50,
+      "per_day": 150
+    },
+    "outbound": {
+      "per_hour": 3,
+      "per_day": 10
+    }
+  },
+  "health": {
+    "last_hour": {
+      "total": 12,
+      "success": 11,
+      "failures": 1,
+      "failure_rate": 0.083,
+      "status": "ok"
+    },
+    "last_day": {
+      "total": 45,
+      "success": 43,
+      "failures": 2,
+      "failure_rate": 0.044,
+      "status": "ok"
+    }
+  }
+}
+```
+
+**Статусы здоровья:**
+- `ok` — процент неудач < 30%
+- `warning` — процент неудач 30-50%
+- `critical` — процент неудач > 50%
+
+**Состояния Circuit Breaker:**
+- `CLOSED` — нормальная работа
+- `OPEN` — защита активна, операции заблокированы на `cooldown_seconds`
+- `HALF_OPEN` — тестирование восстановления после cooldown
+
 ### `GET /api/ui/templates`
 Список активных шаблонов для UI.
 

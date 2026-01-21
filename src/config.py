@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     API_ALLOWED_IPS: list[str] = Field(default=[], env="API_ALLOWED_IPS")
     API_RATE_LIMIT_PER_MINUTE: int = Field(default=120, env="API_RATE_LIMIT_PER_MINUTE")
 
+    # Security - Session Encryption
+    SESSION_ENCRYPTION_KEY: Optional[str] = Field(
+        default=None,
+        env="SESSION_ENCRYPTION_KEY"
+    )
+
     # UI Basic Auth (optional)
     UI_BASIC_AUTH_ENABLED: bool = Field(default=False, env="UI_BASIC_AUTH_ENABLED")
     UI_BASIC_AUTH_USERS: Optional[str] = Field(default=None, env="UI_BASIC_AUTH_USERS")
@@ -189,3 +195,17 @@ class Settings(BaseSettings):
 load_dotenv(".env")
 _apply_file_secrets()
 settings = Settings()
+
+# Initialize session encryption
+from src.crypto import init_session_encryption, derive_key_from_secret
+
+# Use SESSION_ENCRYPTION_KEY if provided, otherwise derive from API_SECRET_KEY
+encryption_key = settings.SESSION_ENCRYPTION_KEY
+if not encryption_key and settings.API_SECRET_KEY:
+    # Fallback: derive key from API_SECRET_KEY for backward compatibility
+    encryption_key = derive_key_from_secret(settings.API_SECRET_KEY)
+    logger.info(
+        "ℹ️ SESSION_ENCRYPTION_KEY not set, deriving from API_SECRET_KEY"
+    )
+
+init_session_encryption(encryption_key)

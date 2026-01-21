@@ -31,20 +31,41 @@ UI:
 python3 -m src.outbox_worker
 ```
 
-## Документация (с чего начать)
-- `QUICKSTART.md` — полный пошаговый запуск локально.
-- `CONFIGURATION.md` — полный справочник по `.env`.
-- `ARCHITECTURE.md` — компоненты, потоки данных, таблицы.
-- `API.md` — все API endpoints и примеры запросов.
-- `UI_GUIDE.md` — как работать в UI.
-- `MTPROTO_GUIDE.md` — риски MTProto, лимиты, комплаенс.
-- `DEPLOYMENT.md` — прод‑развертывание (Docker + Nginx).
-- `OBSERVABILITY.md` — метрики, логи, error tracking.
-- `RUNBOOK.md` — аварии, бэкапы, восстановление.
-- `TESTING.md` — тесты и частые ошибки.
-- `RELEASE_CHECKLIST.md` — чек‑лист релиза.
-- `RELEASE_NOTES.md` — релизные заметки.
-- `PROD_READY_BACKLOG.md` — статус и roadmap до продакшена.
+## 📚 Документация
+
+### Начало работы
+- [START_HERE.md](START_HERE.md) — **начните отсюда!**
+- [QUICKSTART.md](QUICKSTART.md) — полный пошаговый запуск локально
+- [CONFIGURATION.md](CONFIGURATION.md) — полный справочник по `.env`
+- [UI_GUIDE.md](UI_GUIDE.md) — как работать в UI
+
+### Архитектура и API
+- [ARCHITECTURE.md](ARCHITECTURE.md) — компоненты, потоки данных, таблицы
+- [API.md](API.md) — все API endpoints и примеры запросов
+- [TECHNICAL.md](TECHNICAL.md) — env vars таблица, диагностика
+
+### Операции и Production
+- [DEPLOYMENT.md](DEPLOYMENT.md) — прод‑развертывание (Docker + Nginx)
+- [OBSERVABILITY.md](OBSERVABILITY.md) — метрики, логи, error tracking
+- [RUNBOOK.md](RUNBOOK.md) — аварии, бэкапы, восстановление
+- [TESTING.md](TESTING.md) — тесты и частые ошибки
+
+### Релизы и изменения
+- [CHANGELOG.md](CHANGELOG.md) — история изменений
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) — релизные заметки
+- [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) — чек‑лист релиза
+
+### Специальные темы
+- [MTPROTO_GUIDE.md](MTPROTO_GUIDE.md) — риски MTProto, лимиты, комплаенс
+- [NEED_TO_FIX.md](NEED_TO_FIX.md) — известные проблемы и roadmap
+- [EXECUTIVE_SUMMARY.md](EXECUTIVE_SUMMARY.md) — обзор для менеджмента
+
+### Дополнительно
+- [docs/bitrix24/](docs/bitrix24/) — интеграция с Bitrix24
+- [docs/agent/](docs/agent/) — AI Agent документация
+- [docs/methodology/](docs/methodology/) — методология разработки
+- [docs/operations/](docs/operations/) — операционные процедуры
+- [CLAUDE.md](CLAUDE.md) — инструкции для Claude Code AI
 
 ## Важно
 - MTProto = личный аккаунт Telegram. Используйте **отдельный номер**.

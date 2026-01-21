@@ -7,6 +7,7 @@ services:
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus  # Added persistence (#78)
     ports:
       - "9090:9090"
     networks:
@@ -50,8 +51,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}  # Changed (#79)
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}  # Changed (#79)
     volumes:
       - grafana_data:/var/lib/grafana
     networks:
@@ -62,5 +63,6 @@ networks:
     external: true
 
 volumes:
+  prometheus_data:  # Added (#78)
   loki_data:
   grafana_data:

@@ -2,6 +2,32 @@
 
 Цель: развернуть сервис в production с использованием **только бесплатных/opensource** компонентов.
 
+## Production Server Access
+
+**Current Production Server:**
+- Host: `your-server-ip`
+- SSH: `ssh root@your-server-ip`
+- Location: `/root/app` (or `/home/appuser/app` if using appuser)
+
+**Quick Commands:**
+```bash
+# Подключиться к серверу
+ssh root@your-server-ip
+
+# Проверить статус контейнеров
+docker-compose -f docker-compose.production.yml ps
+
+# Просмотр логов
+docker-compose -f docker-compose.production.yml logs -f app
+docker-compose -f docker-compose.production.yml logs -f worker
+
+# Перезапуск после изменений
+cd /root/app
+git pull
+docker-compose -f docker-compose.production.yml down
+docker-compose -f docker-compose.production.yml up -d --build
+```
+
 ## Требования
 - Сервер: 2 CPU / 2 GB RAM / 20+ GB SSD (минимум).
 - ОС: Ubuntu 22.04 LTS (или совместимый Linux).

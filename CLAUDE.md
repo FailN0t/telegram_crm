@@ -42,6 +42,7 @@ python3 -m unittest
 python3 -m unittest tests.test_ui_api
 python3 -m unittest tests.test_outbox_models
 python3 -m unittest tests.test_migration_fk
+python3 -m unittest tests.test_contact_manager
 
 # Run tests on PostgreSQL (recommended before production)
 DATABASE_URL=postgresql://postgres:pass@localhost:5432/telegram_bot_test \
@@ -129,6 +130,14 @@ Supports `*_FILE` variables for Docker/K8s secrets (e.g., `API_SECRET_KEY_FILE=/
    - Redis-backed counters for distributed rate limiting
    - Enforces compliance: consent checking, quiet hours, opt-out
 
+7. **Contact Manager** (`src/contact_manager.py`, `src/monitoring.py`)
+   - Safe phone number extraction from Telegram users
+   - Multi-layer protection: Circuit Breaker, burst detection, rate limiting
+   - Direction-aware limits: inbound (50/hour, 150/day) vs outbound (3/hour, 10/day)
+   - Automatic account ban prevention via Circuit Breaker pattern
+   - Database audit trail (`contact_add_log` table)
+   - Health monitoring endpoint (`/api/admin/contact-health`)
+
 ### Data Flow
 
 **Outgoing Messages (API)**:
@@ -158,9 +167,11 @@ POST /api/ui/send
 **Incoming Messages**:
 ```
 Telegram event (MTProto)
+  → Phone extraction (if not available, ContactManager.add_to_contacts_with_protection)
   → UiMessageHistory (status=received)
   → ChatMapping lookup for CRM mapping
   → MessageHistory record (if mapped)
+  → Bridge forwards to CRM (passes phone parameter)
   → SSE event to /api/ui/stream
 ```
 
@@ -188,6 +199,9 @@ Operations:
 - `operators` - Operator metadata with hourly/daily limits
 - `app_settings` - Admin UI overrides for .env settings (requires restart for some)
 - `audit_log` - Admin action audit trail
+
+Contact Management:
+- `contact_add_log` - Audit trail for Telegram contact additions (tracks all attempts for rate limiting and ban prevention)
 
 ### Multi-Account System
 
@@ -264,6 +278,16 @@ Operations:
 - Redis required for distributed rate limiting (falls back to in-memory)
 - AntiSpamManager uses `try_register_send()` - never call `can_send_message()` directly
 - Quiet hours respect `chat_profiles.quiet_hours_start/end` and `DEFAULT_TIMEZONE`
+
+### Contact Manager and Phone Extraction
+- ALWAYS use `ContactManager.add_to_contacts_with_protection()` - never call Telegram `AddContactRequest` directly
+- Circuit Breaker opens after 3 consecutive failures (5-minute cooldown)
+- Burst limit: max 5 additions per 60 seconds (prevents infinite loops)
+- Direction matters: inbound (customer writes first) is safer with higher limits (50/hour, 150/day)
+- Outbound (we write first) is risky with strict limits (3/hour, 10/day)
+- Phone extraction happens automatically in `telegram_client._handle_incoming_message`
+- Always pass `phone` parameter through bridge to CRM (enables better contact enrichment)
+- Monitor health via `/api/admin/contact-health` endpoint (requires admin role)
 
 ### CRM Provider Selection
 - Set `CRM_PROVIDER=amocrm` or `CRM_PROVIDER=bitrix24` in `.env`
