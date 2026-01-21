@@ -79,6 +79,14 @@ class MTProtoClient:
         # Protects: self.me assignment, event handlers registration
         self._init_lock = asyncio.Lock()
 
+        # Fix #2: Lock to prevent race conditions during connection
+        # Protects: concurrent calls to client.connect()
+        self._connect_lock = asyncio.Lock()
+
+        # Fix #4: Lock to prevent race conditions in _warm_ui_chats
+        # Protects: self._recent_chat_ids modifications
+        self._chats_lock = asyncio.Lock()
+
     async def _load_string_session(self) -> Optional[str]:
         if (
             settings.TELEGRAM_STRING_SESSION
@@ -204,9 +212,22 @@ class MTProtoClient:
                 await session.rollback()
 
     async def connect(self):
-        """Подключение клиента (без интерактивной авторизации)"""
-        if not self.client.is_connected():
-            await self.client.connect()
+        """
+        Подключение клиента (без интерактивной авторизации).
+
+        Fix #2: Double-checked locking to prevent race condition
+        when multiple threads call connect() simultaneously.
+        """
+        # Fast path: check without lock
+        if self.client.is_connected():
+            return
+
+        # Slow path: acquire lock and check again
+        async with self._connect_lock:
+            # Double-check inside lock (another thread may have connected)
+            if not self.client.is_connected():
+                await self.client.connect()
+                logger.debug(f"✅ Telegram client connected (account_id={self.account_id})")
         
     async def start(self):
         """Запуск клиента и авторизация"""
@@ -280,6 +301,12 @@ class MTProtoClient:
         logger.info("✅ MTProto клиент успешно запущен!")
 
     async def _warm_ui_chats(self, limit: int = 200) -> None:
+        """
+        Load recent chats from database into memory.
+
+        Fix #4: Uses lock to prevent race condition when multiple
+        threads call this method simultaneously.
+        """
         try:
             async with SessionLocal() as session:
                 result = await session.execute(
@@ -288,7 +315,11 @@ class MTProtoClient:
                     .order_by(UiChat.last_timestamp.desc().nullslast())
                     .limit(limit)
                 )
-                self._recent_chat_ids = set(result.scalars().all())
+                chat_ids = set(result.scalars().all())
+
+                # Fix #4: Protect assignment with lock
+                async with self._chats_lock:
+                    self._recent_chat_ids = chat_ids
         except Exception as exc:
             logger.warning(f"⚠️ Не удалось загрузить чаты UI из БД: {exc}")
 
@@ -321,8 +352,14 @@ class MTProtoClient:
             ).isoformat() + "Z"
         return info
 
-    def reset_local_state(self):
-        self._recent_chat_ids.clear()
+    async def reset_local_state(self):
+        """
+        Reset local state (chats, auth phone).
+
+        Fix #4: Uses lock to prevent race condition with _warm_ui_chats().
+        """
+        async with self._chats_lock:
+            self._recent_chat_ids.clear()
         self._auth_phone = None
 
     async def logout(self) -> Tuple[bool, str]:
@@ -341,7 +378,7 @@ class MTProtoClient:
         except Exception:
             pass
         self._handlers_registered = False
-        self.reset_local_state()
+        await self.reset_local_state()  # Fix #4: await async method
 
         session_path, journal_path = self._get_session_paths()
         for path in (session_path, journal_path):
