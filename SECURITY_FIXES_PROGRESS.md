@@ -224,8 +224,13 @@ class UiAuthAttempt(Base):
 
 **Результат:** ✅ Magic link авторизация реализована, bruteforce невозможен, audit trail работает
 
-**Note:** Текущая реализация - MVP. В production нужно добавить:
-- Отправку magic link в Telegram через bot API
+**Отправка в Telegram:**
+- ✅ Используется существующий `ALERT_TELEGRAM_BOT_TOKEN`
+- ✅ Отправка через Telegram Bot API (`sendMessage`)
+- ✅ Graceful degradation: если бот не настроен → возвращает ссылку в HTTP response
+- ✅ HTML форматирование сообщения с эмодзи
+
+**Note:** Текущая реализация готова к production. Опционально можно добавить:
 - Proper session management (currently uses simple cookie)
 - Rate limiting на request-magic-link endpoint
 

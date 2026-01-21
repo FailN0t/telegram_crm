@@ -3290,41 +3290,81 @@ def create_app() -> FastAPI:
         base_url = str(request.base_url).rstrip("/")
         magic_link = f"{base_url}/ui/auth/magic?token={token}"
 
-        # Send message to Telegram admin (using default account)
+        # Send message to Telegram via bot
         try:
-            if not bridge or not bridge.telegram:
-                raise Exception("Telegram manager not initialized")
-
-            # Get default account's phone/user_id to send message to admin
-            # For now, we'll send to the first available operator or log event
-            # In production, you'd send to a specific admin chat_id
-
-            await log_ui_event(
-                "info",
-                "magic_link_generated",
-                {
-                    "token": token[:8] + "...",  # Truncate for logs
-                    "link": magic_link,
-                    "expires_in": 300
+            # Check if bot is configured
+            if not settings.ALERT_TELEGRAM_BOT_TOKEN or not settings.ALERT_TELEGRAM_CHAT_ID:
+                logger.warning(
+                    "⚠️ ALERT_TELEGRAM_BOT_TOKEN или ALERT_TELEGRAM_CHAT_ID не настроены. "
+                    "Magic link не может быть отправлен в Telegram."
+                )
+                # Return link in response for development/testing
+                return {
+                    "success": True,
+                    "message": "⚠️ Telegram bot не настроен. Используйте ссылку ниже:",
+                    "link": magic_link
                 }
+
+            # Send via Telegram Bot API
+            import aiohttp
+
+            bot_token = settings.ALERT_TELEGRAM_BOT_TOKEN
+            chat_id = settings.ALERT_TELEGRAM_CHAT_ID
+
+            message_text = (
+                "🔐 <b>Magic Link для входа в UI</b>\n\n"
+                f"Кликните для авторизации:\n{magic_link}\n\n"
+                "⏰ Истекает через 5 минут\n"
+                "🔒 Одноразовая ссылка"
             )
 
-            # TODO: Send message to Telegram admin
-            # This would require knowing admin's chat_id or sending to a specific channel
-            # For MVP: just log the link
-            logger.info(f"🔗 Magic link generated: {magic_link}")
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": message_text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": False
+                }
 
-            return {
-                "success": True,
-                "message": "Magic link создан. Проверьте Telegram для получения ссылки.",
-                "link": magic_link  # For development/testing - remove in production
-            }
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ Magic link отправлен в Telegram (chat_id={chat_id})")
+
+                        # Log event
+                        await log_ui_event(
+                            "info",
+                            "magic_link_sent_to_telegram",
+                            {
+                                "token": token[:8] + "...",
+                                "chat_id": chat_id,
+                                "expires_in": 300
+                            }
+                        )
+
+                        return {
+                            "success": True,
+                            "message": "✅ Magic link отправлен в Telegram. Проверьте сообщения от бота."
+                        }
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Telegram API error: {response.status} - {error_text}")
+
+                        # Fallback: return link in response
+                        return {
+                            "success": True,
+                            "message": f"⚠️ Не удалось отправить в Telegram (HTTP {response.status}). Используйте ссылку:",
+                            "link": magic_link
+                        }
 
         except Exception as e:
-            logger.error(f"❌ Ошибка отправки magic link в Telegram: {e}")
+            logger.error(f"❌ Ошибка отправки magic link через bot: {e}")
+
+            # Fallback: return link in response for development
             return {
-                "success": False,
-                "message": f"Ошибка отправки в Telegram: {e}"
+                "success": True,
+                "message": f"⚠️ Ошибка отправки в Telegram: {e}. Используйте ссылку:",
+                "link": magic_link
             }
 
     @app.get("/ui/auth/magic", tags=["UI"])

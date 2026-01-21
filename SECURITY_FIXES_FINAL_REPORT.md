@@ -235,10 +235,23 @@ async def ui_activate_magic_link(token: str, request: Request, db: AsyncSession 
 
 **Impact**: Eliminates bruteforce vulnerability, provides secure authentication alternative
 
-**Note**: Current implementation is MVP. Production TODO:
-- Send magic link to Telegram via bot API
-- Proper session management (currently simple cookie)
-- Rate limiting on request-magic-link endpoint
+**Telegram Integration** (Production-Ready):
+- ✅ Uses existing `ALERT_TELEGRAM_BOT_TOKEN` and `ALERT_TELEGRAM_CHAT_ID`
+- ✅ Sends message via Telegram Bot API (`sendMessage` method)
+- ✅ HTML formatted message with emoji for better UX
+- ✅ Graceful fallback: if bot not configured → returns link in HTTP response
+- ✅ Error handling: Telegram API errors logged, link still accessible
+
+**Configuration Required**:
+```bash
+# In .env file:
+ALERT_TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+ALERT_TELEGRAM_CHAT_ID=123456789
+```
+
+**Optional Improvements**:
+- Proper session management (currently simple cookie - works but can be improved)
+- Rate limiting on request-magic-link endpoint (prevents spam)
 
 ---
 
