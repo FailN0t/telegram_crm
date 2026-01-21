@@ -324,7 +324,135 @@ class AmoCRMClient:
                     return values[0].get('value')
         
         return None
-    
+
+    async def create_contact(
+        self,
+        first_name: str,
+        last_name: Optional[str] = None,
+        phone: Optional[str] = None,
+        telegram_username: Optional[str] = None,
+        telegram_chat_id: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Создание нового контакта в AmoCRM
+
+        AmoCRM API: POST /api/v4/contacts
+        Документация: https://www.amocrm.ru/developers/content/crm_platform/contacts-api
+
+        Args:
+            first_name: Имя контакта
+            last_name: Фамилия контакта (опционально)
+            phone: Номер телефона (опционально)
+            telegram_username: Username в Telegram (опционально)
+            telegram_chat_id: Chat ID в Telegram (опционально)
+
+        Returns:
+            ID созданного контакта или None в случае ошибки
+        """
+        if not await self.ensure_token_valid():
+            return None
+
+        try:
+            # Формируем полное имя
+            full_name = first_name
+            if last_name:
+                full_name = f"{first_name} {last_name}"
+
+            logger.info(f"➕ Создание контакта в AmoCRM: {full_name}")
+
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                headers = {
+                    'Authorization': f'Bearer {self.access_token}',
+                    'Content-Type': 'application/json',
+                }
+
+                # Базовые поля контакта
+                contact_data = {
+                    'name': full_name,
+                }
+
+                # first_name и last_name - это отдельные поля в AmoCRM
+                if first_name:
+                    contact_data['first_name'] = first_name
+                if last_name:
+                    contact_data['last_name'] = last_name
+
+                # Custom поля
+                custom_fields_values = []
+
+                # Добавляем телефон если есть
+                if phone:
+                    custom_fields_values.append({
+                        'field_code': 'PHONE',
+                        'values': [
+                            {
+                                'value': phone,
+                                'enum_code': 'WORK'
+                            }
+                        ]
+                    })
+
+                # Добавляем Telegram username если настроено поле
+                if telegram_username and settings.AMOCRM_FIELD_TELEGRAM_USERNAME:
+                    custom_fields_values.append({
+                        'field_id': settings.AMOCRM_FIELD_TELEGRAM_USERNAME,
+                        'values': [
+                            {
+                                'value': telegram_username
+                            }
+                        ]
+                    })
+
+                # Добавляем Telegram chat_id если настроено поле
+                if telegram_chat_id and settings.AMOCRM_FIELD_TELEGRAM_CHAT_ID:
+                    custom_fields_values.append({
+                        'field_id': settings.AMOCRM_FIELD_TELEGRAM_CHAT_ID,
+                        'values': [
+                            {
+                                'value': str(telegram_chat_id)
+                            }
+                        ]
+                    })
+
+                # Добавляем custom поля если есть
+                if custom_fields_values:
+                    contact_data['custom_fields_values'] = custom_fields_values
+
+                # AmoCRM API требует массив контактов
+                data = [contact_data]
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, response_data = await self._make_request(
+                    session,
+                    'POST',
+                    f'{self.base_url}/contacts',
+                    headers=headers,
+                    json=data,
+                    return_json=True
+                )
+
+                # Извлекаем ID созданного контакта
+                embedded = response_data.get('_embedded', {})
+                contacts = embedded.get('contacts', [])
+
+                if contacts and len(contacts) > 0:
+                    contact_id = contacts[0].get('id')
+                    logger.info(f"✅ Контакт создан в AmoCRM: ID {contact_id}")
+                    return int(contact_id)
+                else:
+                    logger.error("❌ AmoCRM не вернул ID созданного контакта")
+                    return None
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при создании контакта (status {e.status}): {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Исключение при создании контакта: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
     async def update_contact_field(
         self,
         contact_id: int,
@@ -390,7 +518,132 @@ class AmoCRMClient:
         except Exception as e:
             logger.error(f"❌ Исключение при обновлении поля: {e}")
             return False
-    
+
+    async def update_contact(
+        self,
+        contact_id: int,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        phone: Optional[str] = None,
+        telegram_username: Optional[str] = None,
+        telegram_chat_id: Optional[int] = None
+    ) -> bool:
+        """
+        Обновление базовых полей контакта в AmoCRM
+
+        AmoCRM API: PATCH /api/v4/contacts/{id}
+        Документация: https://www.amocrm.ru/developers/content/crm_platform/contacts-api
+
+        Args:
+            contact_id: ID контакта в AmoCRM
+            first_name: Новое имя (опционально)
+            last_name: Новая фамилия (опционально)
+            phone: Новый телефон (опционально)
+            telegram_username: Новый Telegram username (опционально)
+            telegram_chat_id: Новый Telegram chat ID (опционально)
+
+        Returns:
+            bool: Успешно ли обновлен контакт
+        """
+        if not await self.ensure_token_valid():
+            return False
+
+        try:
+            logger.info(f"📝 Обновление контакта {contact_id} в AmoCRM")
+
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                headers = {
+                    'Authorization': f'Bearer {self.access_token}',
+                    'Content-Type': 'application/json',
+                }
+
+                # Собираем данные для обновления
+                contact_data = {}
+
+                # Базовые поля
+                if first_name is not None:
+                    contact_data['first_name'] = first_name
+                if last_name is not None:
+                    contact_data['last_name'] = last_name
+
+                # Обновляем полное имя если есть first_name или last_name
+                if first_name is not None or last_name is not None:
+                    # Получаем текущий контакт чтобы не потерять имя/фамилию
+                    current = await self.find_contact_by_id(contact_id)
+                    if current:
+                        current_first = first_name if first_name is not None else current.get('first_name', '')
+                        current_last = last_name if last_name is not None else current.get('last_name', '')
+                        contact_data['name'] = f"{current_first} {current_last}".strip()
+
+                # Custom поля
+                custom_fields_values = []
+
+                # Телефон
+                if phone is not None:
+                    custom_fields_values.append({
+                        'field_code': 'PHONE',
+                        'values': [
+                            {
+                                'value': phone,
+                                'enum_code': 'WORK'
+                            }
+                        ]
+                    })
+
+                # Telegram username
+                if telegram_username is not None and settings.AMOCRM_FIELD_TELEGRAM_USERNAME:
+                    custom_fields_values.append({
+                        'field_id': settings.AMOCRM_FIELD_TELEGRAM_USERNAME,
+                        'values': [
+                            {
+                                'value': telegram_username
+                            }
+                        ]
+                    })
+
+                # Telegram chat_id
+                if telegram_chat_id is not None and settings.AMOCRM_FIELD_TELEGRAM_CHAT_ID:
+                    custom_fields_values.append({
+                        'field_id': settings.AMOCRM_FIELD_TELEGRAM_CHAT_ID,
+                        'values': [
+                            {
+                                'value': str(telegram_chat_id)
+                            }
+                        ]
+                    })
+
+                # Добавляем custom поля если есть
+                if custom_fields_values:
+                    contact_data['custom_fields_values'] = custom_fields_values
+
+                # Если нечего обновлять - возвращаем True
+                if not contact_data:
+                    logger.warning("⚠️ Нет данных для обновления контакта")
+                    return True
+
+                # Use _make_request with retry logic for 429/5xx errors
+                status, response_data = await self._make_request(
+                    session,
+                    'PATCH',
+                    f'{self.base_url}/contacts/{contact_id}',
+                    headers=headers,
+                    json=contact_data,
+                    return_json=True
+                )
+
+                logger.info(f"✅ Контакт {contact_id} успешно обновлен в AmoCRM")
+                return True
+
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"❌ HTTP ошибка при обновлении контакта (status {e.status}): {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Исключение при обновлении контакта: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
     async def create_note(
         self,
         contact_id: int,
