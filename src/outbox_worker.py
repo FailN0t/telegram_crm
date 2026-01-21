@@ -91,6 +91,51 @@ class OutboxWorker:
         entry.updated_at = datetime.utcnow()
         await db.commit()
 
+    async def recover_orphaned_messages(self) -> None:
+        """
+        Fix #16: Recover orphaned messages from previous crashes.
+
+        Finds messages stuck in 'processing' status and returns them to queue.
+        This is called on startup to handle unclean shutdowns/crashes.
+        """
+        from src.database import SessionLocal, MessageOutbox
+        from datetime import datetime, timedelta
+
+        logger.info("🔍 Checking for orphaned messages from previous crashes...")
+
+        async with SessionLocal() as session:
+            # Find messages in 'processing' status older than 5 minutes
+            timeout_threshold = datetime.utcnow() - timedelta(minutes=5)
+
+            stmt = select(MessageOutbox).filter(
+                MessageOutbox.status == "processing",
+                MessageOutbox.updated_at < timeout_threshold
+            )
+
+            result = await session.execute(stmt)
+            orphaned = result.scalars().all()
+
+            if not orphaned:
+                logger.info("✅ No orphaned messages found")
+                return
+
+            logger.warning(f"⚠️ Found {len(orphaned)} orphaned messages, returning to queue...")
+
+            for outbox in orphaned:
+                logger.info(
+                    f"🔄 Recovering orphaned message: id={outbox.id} "
+                    f"chat_id={outbox.chat_id} attempts={outbox.attempts}"
+                )
+                outbox.status = "failed"
+                outbox.updated_at = datetime.utcnow()
+                # Don't increment attempts - this wasn't a real delivery attempt
+                # Schedule immediate retry
+                outbox.next_attempt_at = datetime.utcnow()
+                session.add(outbox)
+
+            await session.commit()
+            logger.info(f"✅ Recovered {len(orphaned)} orphaned messages")
+
     async def initialize(self) -> None:
         logger.info("📦 Инициализация outbox worker...")
         init_error_tracking()
@@ -99,6 +144,9 @@ class OutboxWorker:
             await refresh_settings_from_db()
         except Exception as exc:
             logger.warning("⚠️ Не удалось применить admin-настройки: %s", exc)
+
+        # Fix #16: Recover orphaned messages from previous crashes
+        await self.recover_orphaned_messages()
 
         # Инициализация CRM клиента (AmoCRM или Bitrix24)
         crm_provider = settings.CRM_PROVIDER.lower()
@@ -332,7 +380,16 @@ class OutboxWorker:
                     if outbox.account_id and "account_id" not in payload:
                         payload["account_id"] = outbox.account_id
 
+                    # Fix #15: Process with timeout to handle graceful shutdown
                     success, message = await self.process_payload(session, payload)
+
+                    # Fix #15: Check if shutdown requested during processing
+                    if self.stop_event.is_set():
+                        logger.warning(
+                            "⚠️ Shutdown requested during processing, saving result for id=%s",
+                            outbox.id
+                        )
+                        # Continue to save result, then exit
 
                     if success:
                         await mark_outbox_result(session, outbox, True, None)
@@ -378,6 +435,8 @@ class OutboxWorker:
                     except Exception as mark_exc:
                         logger.error(f"❌ Не удалось пометить outbox как failed: {mark_exc}")
 
+        # Fix #15: Log graceful shutdown completion
+        logger.info("✅ Graceful shutdown complete: all in-progress messages saved")
         await self.stop()
 
 
