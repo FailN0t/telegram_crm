@@ -133,9 +133,17 @@ class OutboxWorker:
                 logger.warning("⚠️ AmoCRM отключен: нет обязательных настроек")
 
         self.telegram_manager = TelegramClientManager()
+
+        # Создаем bridge ДО запуска клиентов
+        self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
+
+        # Устанавливаем bridge в telegram_manager
+        self.telegram_manager.set_bridge(self.bridge)
+        logger.info("✅ Bridge установлен в telegram_manager")
+
+        # Теперь запускаем клиенты с уже установленным bridge
         await self.telegram_manager.start_all()
 
-        self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
         logger.info("✅ Outbox worker готов")
 
     async def stop(self) -> None:
@@ -231,26 +239,59 @@ class OutboxWorker:
             if not target_user:
                 return False, "user_not_found"
 
+            # Open Channels: пропускаем quiet hours, т.к. операторы отвечают в любое время
             success, result = await client.send_message_to_user(
                 target_user,
                 message,
-                operator_id=payload.get("operator_id")
+                operator_id=payload.get("operator_id"),
+                skip_quiet_hours=True
             )
 
-            # Отправляем статус доставки обратно в Bitrix24
+            # Отправляем статусы доставки и прочтения обратно в Bitrix24
             if success and self.crm and hasattr(self.crm, 'send_status_delivery'):
                 bitrix_msg_id = payload.get("bitrix_message_id")
+                bitrix_chat_id = payload.get("bitrix_chat_id")
                 line_id = payload.get("line_id", 0)
-                if bitrix_msg_id:
+
+                if bitrix_msg_id and bitrix_chat_id:
                     try:
                         from src.config import settings
-                        await self.crm.send_status_delivery(
+
+                        # Формат согласно официальной документации Bitrix24
+                        messages = [{
+                            "im": {
+                                "chat_id": str(bitrix_chat_id),
+                                "message_id": str(bitrix_msg_id)
+                            },
+                            "message": {
+                                "id": str(bitrix_msg_id)
+                            },
+                            "chat": {
+                                "id": str(chat_id)  # Telegram chat_id
+                            }
+                        }]
+
+                        # Delivery status
+                        delivery_result = await self.crm.send_status_delivery(
                             connector_id=settings.BITRIX24_CONNECTOR_ID,
                             line_id=line_id,
-                            message_ids=[str(bitrix_msg_id)]
+                            messages=messages
                         )
+                        logger.info(f"✅ Delivery status: {delivery_result}")
+
+                        # Reading status НЕ отправляем сразу
+                        # Он будет отправлен при получении события MessageRead от Telegram
+                        # См. обработчик в telegram_client.py: handle_message_read()
+
                     except Exception as e:
-                        logger.warning(f"⚠️ Не удалось отправить статус доставки: {e}")
+                        logger.warning(f"⚠️ Не удалось отправить статусы: {e}")
+                        import traceback
+                        logger.warning(traceback.format_exc())
+                else:
+                    if not bitrix_msg_id:
+                        logger.warning(f"⚠️ bitrix_message_id отсутствует в payload")
+                    if not bitrix_chat_id:
+                        logger.warning(f"⚠️ bitrix_chat_id отсутствует в payload")
 
             return success, result
 
@@ -323,15 +364,17 @@ class OutboxWorker:
                 logger.error(f"❌ Ошибка обработки outbox: {exc}")
                 # КРИТИЧНО: Если произошла ошибка И у нас есть outbox,
                 # помечаем его как failed чтобы не потерять сообщение
-                if outbox and session:
+                # Fix #175: Create NEW session since old one is closed after async with block
+                if outbox:
                     try:
-                        await mark_outbox_result(session, outbox, False, f"exception: {str(exc)[:200]}")
-                        await self.update_ui_history_status(
-                            session,
-                            outbox.payload,
-                            "failed",
-                            str(exc)[:200]
-                        )
+                        async with SessionLocal() as error_session:
+                            await mark_outbox_result(error_session, outbox, False, f"exception: {str(exc)[:200]}")
+                            await self.update_ui_history_status(
+                                error_session,
+                                outbox.payload,
+                                "failed",
+                                str(exc)[:200]
+                            )
                     except Exception as mark_exc:
                         logger.error(f"❌ Не удалось пометить outbox как failed: {mark_exc}")
 
