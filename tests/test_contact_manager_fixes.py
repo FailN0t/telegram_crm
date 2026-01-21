@@ -218,11 +218,120 @@ class TestContactManagerFix178(unittest.TestCase):
 class TestContactManagerFix159(unittest.TestCase):
     """Test #159: Проверка client.is_connected() перед Telegram API calls"""
 
-    def test_connection_check_placeholder(self):
-        """Test #159: Placeholder для проверки is_connected()"""
-        # This will be implemented when we add is_connected() checks
-        # to contact_manager.py methods that call Telegram API
-        pass
+    def test_add_to_contacts_checks_is_connected_early(self):
+        """Test #159: add_to_contacts_with_protection() проверяет is_connected() в начале"""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from src.contact_manager import ContactManager
+
+        async def run_test():
+            contact_mgr = ContactManager()
+
+            # Mock client that is NOT connected
+            mock_client = MagicMock()
+            mock_client.is_connected = MagicMock(return_value=False)
+
+            # Try to add contact with disconnected client
+            success, phone = await contact_mgr.add_to_contacts_with_protection(
+                client=mock_client,
+                telegram_user_id=12345,
+                first_name="Test",
+                last_name="User",
+                username="testuser",
+                direction="inbound",
+                source="test"
+            )
+
+            # Should fail immediately
+            self.assertFalse(success)
+            self.assertIsNone(phone)
+
+            # Verify is_connected() was called (early check)
+            mock_client.is_connected.assert_called()
+
+        asyncio.run(run_test())
+
+    def test_do_telegram_api_call_checks_is_connected_before_api(self):
+        """Test #159: _do_telegram_api_call() проверяет is_connected() перед API"""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from src.contact_manager import ContactManager
+
+        async def run_test():
+            contact_mgr = ContactManager()
+
+            # Mock client that becomes disconnected right before API call
+            mock_client = MagicMock()
+            mock_client.is_connected = MagicMock(return_value=False)
+            mock_client.__call__ = AsyncMock()  # Mock the client() call
+
+            # Try to call _do_telegram_api_call directly
+            success, phone = await contact_mgr._do_telegram_api_call(
+                client=mock_client,
+                telegram_user_id=12345,
+                first_name="Test",
+                last_name="User",
+                username="testuser",
+                direction="inbound",
+                source="test"
+            )
+
+            # Should fail without calling Telegram API
+            self.assertFalse(success)
+            self.assertIsNone(phone)
+
+            # Verify is_connected() was called
+            mock_client.is_connected.assert_called()
+
+            # Verify Telegram API was NOT called (client disconnected)
+            mock_client.__call__.assert_not_called()
+
+        asyncio.run(run_test())
+
+    def test_connection_check_prevents_flood_errors(self):
+        """Test #159: Connection check предотвращает FloodWait errors"""
+        import asyncio
+        from unittest.mock import MagicMock
+        from src.contact_manager import ContactManager
+
+        async def run_test():
+            contact_mgr = ContactManager()
+
+            # Simulate scenario: client disconnects between checks
+            call_count = [0]
+
+            def is_connected_side_effect():
+                call_count[0] += 1
+                # First call: connected, second call: disconnected
+                return call_count[0] == 1
+
+            mock_client = MagicMock()
+            mock_client.is_connected = MagicMock(side_effect=is_connected_side_effect)
+
+            # Mock can_add_contact to allow addition
+            async def mock_can_add(direction, user_id):
+                return True, "ok"
+
+            contact_mgr.can_add_contact = mock_can_add
+
+            # Try to add contact
+            success, phone = await contact_mgr.add_to_contacts_with_protection(
+                client=mock_client,
+                telegram_user_id=12345,
+                first_name="Test",
+                last_name="User",
+                username="testuser",
+                direction="inbound",
+                source="test"
+            )
+
+            # Should fail at second check (in _do_telegram_api_call)
+            self.assertFalse(success)
+
+            # Verify is_connected() was called multiple times (TOCTOU prevention)
+            self.assertEqual(mock_client.is_connected.call_count, 2)
+
+        asyncio.run(run_test())
 
 
 if __name__ == "__main__":
