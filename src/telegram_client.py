@@ -1091,22 +1091,16 @@ class MTProtoClient:
             )
             return False, error_msg
 
-        if is_new_chat is None:
-            async with SessionLocal() as session:
-                result = await session.execute(
-                    select(UiChat).filter_by(
-                        chat_id=user.id,
-                        account_id=self.account_id
-                    )
-                )
-                is_new_chat = result.scalars().first() is None
-
-        # Проверка anti-spam (атомарно с регистрацией)
+        # Fix #5: Проверка anti-spam с АТОМАРНОЙ проверкой is_new_chat
+        # Передаем chat_id и account_id чтобы try_register_send сам проверил
+        # is_new_chat внутри своего lock (без race condition)
         can_send, reason = await self.anti_spam.try_register_send(
             user.id,
-            is_new_chat,
+            is_new_chat=is_new_chat,
             operator_id=operator_id,
-            skip_quiet_hours=skip_quiet_hours
+            skip_quiet_hours=skip_quiet_hours,
+            chat_id=user.id,
+            account_id=self.account_id
         )
         if not can_send:
             logger.warning(f"⚠️ Anti-spam блокировка: {reason}")

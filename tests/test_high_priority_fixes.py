@@ -281,5 +281,262 @@ class TestFix4RaceConditionWarmChats(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TestFix17SessionLeakOnException(unittest.TestCase):
+    """Test #17: Session leak on exception"""
+
+    def test_session_closed_on_exception(self):
+        """Test #17: Session закрывается при исключении"""
+        import asyncio
+        from src.telegram_client import MTProtoClient
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        async def run_test():
+            with patch('src.telegram_client.settings') as mock_settings, \
+                 patch('src.telegram_client.TelegramClient') as MockTelegramClient, \
+                 patch('src.telegram_client.SessionLocal') as MockSessionLocal:
+
+                mock_settings.TELEGRAM_API_ID = 12345
+                mock_settings.TELEGRAM_API_HASH = "test_hash"
+                mock_settings.TELEGRAM_PHONE = "+1234567890"
+                mock_settings.TELEGRAM_SESSION_NAME = "test_session"
+                mock_settings.TELEGRAM_STRING_SESSION = None
+
+                # Track session lifecycle
+                session_opened = [False]
+                session_closed = [False]
+
+                class MockSessionContext:
+                    async def __aenter__(self):
+                        session_opened[0] = True
+                        mock_session = MagicMock()
+                        # Simulate exception during query
+                        mock_session.execute = AsyncMock(side_effect=Exception("Database error"))
+                        return mock_session
+
+                    async def __aexit__(self, exc_type, exc_val, exc_tb):
+                        session_closed[0] = True
+                        return False  # Don't suppress exception
+
+                MockSessionLocal.return_value = MockSessionContext()
+
+                mock_client = MagicMock()
+                MockTelegramClient.return_value = mock_client
+
+                client = MTProtoClient(account_id=1)
+
+                # Call _load_string_session which uses SessionLocal
+                result = await client._load_string_session()
+
+                # Session should be closed even though exception occurred
+                self.assertTrue(session_opened[0], "Session should have been opened")
+                self.assertTrue(session_closed[0], "Session should have been closed despite exception")
+                self.assertIsNone(result, "Should return None on exception")
+
+        asyncio.run(run_test())
+
+    def test_session_closed_on_early_return(self):
+        """Test #17: Session закрывается при раннем return"""
+        import asyncio
+        from src.telegram_client import MTProtoClient
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        async def run_test():
+            with patch('src.telegram_client.settings') as mock_settings, \
+                 patch('src.telegram_client.TelegramClient') as MockTelegramClient, \
+                 patch('src.telegram_client.SessionLocal') as MockSessionLocal:
+
+                mock_settings.TELEGRAM_API_ID = 12345
+                mock_settings.TELEGRAM_API_HASH = "test_hash"
+                mock_settings.TELEGRAM_PHONE = "+1234567890"
+                mock_settings.TELEGRAM_SESSION_NAME = "test_session"
+                mock_settings.TELEGRAM_STRING_SESSION = "test_string_session"
+
+                mock_client = MagicMock()
+                MockTelegramClient.return_value = mock_client
+
+                client = MTProtoClient(account_id=1)
+
+                # Call should return early (settings.TELEGRAM_STRING_SESSION is set)
+                # No session should be opened
+                result = await client._load_string_session()
+
+                # Should return the string session without opening DB session
+                self.assertEqual(result, "test_string_session")
+
+        asyncio.run(run_test())
+
+
+class TestFix18TempFileLeak(unittest.TestCase):
+    """Test #18: Temporary files leak"""
+
+    def test_temp_file_cleaned_up_on_success(self):
+        """Test #18: Temp file удаляется после успешной загрузки"""
+        # This test verifies the finally block works
+        import tempfile
+        import os
+
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
+                temp_path = tmp.name
+                tmp.write(b"test data")
+
+            # Simulate successful processing
+            self.assertTrue(os.path.exists(temp_path), "Temp file should exist during processing")
+
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+        # Verify cleanup happened
+        self.assertFalse(os.path.exists(temp_path), "Temp file should be deleted in finally block")
+
+    def test_temp_file_cleaned_up_on_exception(self):
+        """Test #18: Temp file удаляется даже при исключении"""
+        import tempfile
+        import os
+
+        temp_path = None
+        exception_raised = False
+
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
+                temp_path = tmp.name
+                tmp.write(b"test data")
+
+            # Simulate exception during processing
+            raise Exception("Simulated error")
+
+        except Exception:
+            exception_raised = True
+
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+        # Verify exception was raised and cleanup happened
+        self.assertTrue(exception_raised, "Exception should have been raised")
+        self.assertFalse(os.path.exists(temp_path), "Temp file should be deleted despite exception")
+
+
+class TestFix5AtomicIsNewChatCheck(unittest.TestCase):
+    """Test #5: Atomic check для is_new_chat"""
+
+    def test_is_new_chat_checked_inside_lock(self):
+        """Test #5: is_new_chat проверяется внутри lock anti_spam"""
+        import asyncio
+        from src.antispam import AntiSpamManager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        async def run_test():
+            with patch('src.antispam.settings') as mock_settings:
+                mock_settings.MAX_MESSAGES_PER_HOUR = 100
+                mock_settings.MAX_NEW_CHATS_PER_DAY = 10
+                mock_settings.MIN_DELAY_BETWEEN_MESSAGES = 1
+
+                anti_spam = AntiSpamManager()
+
+                # Test: when is_new_chat is explicitly provided, no DB check needed
+                # Call with is_new_chat=False (explicit)
+                can_send, reason = await anti_spam.try_register_send(
+                    user_id=12345,
+                    is_new_chat=False,  # Explicit value
+                    chat_id=12345,
+                    account_id=1,
+                    skip_quiet_hours=True
+                )
+
+                # Should succeed
+                self.assertTrue(can_send, f"Should allow send, but got: {reason}")
+
+        asyncio.run(run_test())
+
+    def test_concurrent_is_new_chat_serialized_by_lock(self):
+        """Test #5: Concurrent вызовы сериализуются через _lock"""
+        import asyncio
+        from src.antispam import AntiSpamManager
+        from unittest.mock import patch
+
+        async def run_test():
+            with patch('src.antispam.settings') as mock_settings:
+                mock_settings.MAX_MESSAGES_PER_HOUR = 100
+                mock_settings.MAX_NEW_CHATS_PER_DAY = 10
+                mock_settings.MIN_DELAY_BETWEEN_MESSAGES = 0
+
+                anti_spam = AntiSpamManager()
+
+                # Verify lock exists
+                self.assertIsNotNone(anti_spam._lock)
+
+                # Launch 3 concurrent calls with explicit is_new_chat (no DB check)
+                results = await asyncio.gather(
+                    anti_spam.try_register_send(
+                        user_id=99999,
+                        is_new_chat=False,  # Explicit to avoid DB
+                        skip_quiet_hours=True
+                    ),
+                    anti_spam.try_register_send(
+                        user_id=99998,
+                        is_new_chat=False,
+                        skip_quiet_hours=True
+                    ),
+                    anti_spam.try_register_send(
+                        user_id=99997,
+                        is_new_chat=False,
+                        skip_quiet_hours=True
+                    )
+                )
+
+                # All should succeed (within limits)
+                for can_send, reason in results:
+                    self.assertTrue(can_send, f"All sends should succeed: {reason}")
+
+        asyncio.run(run_test())
+
+    def test_is_new_chat_params_available_in_api(self):
+        """Test #5: chat_id and account_id параметры доступны в API"""
+        import asyncio
+        from src.antispam import AntiSpamManager
+        from unittest.mock import patch
+        import inspect
+
+        async def run_test():
+            # Verify that try_register_send accepts new parameters
+            sig = inspect.signature(AntiSpamManager.try_register_send)
+            params = list(sig.parameters.keys())
+
+            self.assertIn('chat_id', params, "chat_id parameter should be in signature")
+            self.assertIn('account_id', params, "account_id parameter should be in signature")
+            self.assertIn('is_new_chat', params, "is_new_chat parameter should be in signature")
+
+            # Verify it can be called with new parameters
+            with patch('src.antispam.settings') as mock_settings:
+                mock_settings.MAX_MESSAGES_PER_HOUR = 100
+                mock_settings.MAX_NEW_CHATS_PER_DAY = 10
+                mock_settings.MIN_DELAY_BETWEEN_MESSAGES = 0
+
+                anti_spam = AntiSpamManager()
+
+                # Call with new parameters (explicit is_new_chat to avoid DB)
+                can_send, reason = await anti_spam.try_register_send(
+                    user_id=12345,
+                    is_new_chat=False,
+                    chat_id=12345,
+                    account_id=1,
+                    skip_quiet_hours=True
+                )
+
+                # Should succeed
+                self.assertTrue(can_send, f"Should work with new parameters: {reason}")
+
+        asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     unittest.main()

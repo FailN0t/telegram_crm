@@ -336,15 +336,22 @@ class AntiSpamManager:
     async def try_register_send(
         self,
         user_id: int,
-        is_new_chat: bool = False,
-        operator_id: Optional[int] = None
+        is_new_chat: Optional[bool] = None,
+        operator_id: Optional[int] = None,
+        skip_quiet_hours: bool = False,
+        chat_id: Optional[int] = None,
+        account_id: Optional[int] = None
     ) -> Tuple[bool, str]:
         """
         Проверяет лимиты и регистрирует отправку одним атомарным шагом
 
         Args:
             user_id: ID пользователя Telegram
-            is_new_chat: Является ли это первым сообщением пользователю
+            is_new_chat: Является ли это первым сообщением пользователю (если None, определяется автоматически)
+            operator_id: ID оператора (если есть)
+            skip_quiet_hours: Пропустить проверку тихих часов (для Open Channels)
+            chat_id: ID чата для определения is_new_chat (если is_new_chat=None)
+            account_id: ID аккаунта для определения is_new_chat (если is_new_chat=None)
 
         Returns:
             (bool, str): (можно ли отправить, причина если нельзя)
@@ -352,8 +359,27 @@ class AntiSpamManager:
         async with self._lock:
             now = datetime.now()
 
+            # Fix #5: Атомарная проверка is_new_chat внутри lock
+            if is_new_chat is None and chat_id is not None and account_id is not None:
+                from src.database import SessionLocal, UiChat
+                from sqlalchemy import select
+
+                async with SessionLocal() as session:
+                    result = await session.execute(
+                        select(UiChat).filter_by(
+                            chat_id=chat_id,
+                            account_id=account_id
+                        )
+                    )
+                    is_new_chat = result.scalars().first() is None
+
+            # Default to False if still not determined
+            if is_new_chat is None:
+                is_new_chat = False
+
             # Проверка времени отправки (не ночью)
-            if now.hour < 9 or now.hour > 21:
+            # Для Open Channels пропускаем эту проверку
+            if not skip_quiet_hours and (now.hour < 9 or now.hour > 21):
                 return False, f"⏰ Неподходящее время ({now.hour}:00). Отправляйте с 9:00 до 21:00"
 
             redis = await get_redis()
