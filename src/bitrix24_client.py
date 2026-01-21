@@ -14,6 +14,9 @@ from src.config import settings
 from src.logger import logger
 from src.retry_utils import retry_async, CRM_API_RETRY
 
+# Fix #21: HTTP timeout для предотвращения бесконечного ожидания
+DEFAULT_HTTP_TIMEOUT = 30  # секунд
+
 
 class Bitrix24Client:
     """
@@ -153,7 +156,8 @@ class Bitrix24Client:
         try:
             logger.info("🔄 Обновление Bitrix24 access token...")
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 params = {
                     "grant_type": "refresh_token",
                     "client_id": self.client_id,
@@ -206,7 +210,8 @@ class Bitrix24Client:
         try:
             logger.info(f"🔄 Обмен authorization code на токены Bitrix24 (domain={target_domain})...")
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 # Важно: используем POST с form data, включаем redirect_uri
                 data = {
                     "grant_type": "authorization_code",
@@ -355,7 +360,8 @@ class Bitrix24Client:
                 # OAuth: добавляем токен в URL
                 url = f"{self.base_url}/{method}?auth={self.access_token}"
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 # Use _make_request with retry logic for 429/5xx errors
                 status, data = await self._make_request(
                     session,

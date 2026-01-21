@@ -12,6 +12,9 @@ from src.config import settings
 from src.logger import logger
 from src.retry_utils import retry_async, CRM_API_RETRY
 
+# Fix #20: HTTP timeout для предотвращения бесконечного ожидания
+DEFAULT_HTTP_TIMEOUT = 30  # секунд
+
 
 class AmoCRMClient:
     """
@@ -131,8 +134,9 @@ class AmoCRMClient:
         """
         try:
             logger.info("🔄 Обновление AmoCRM access token...")
-            
-            async with aiohttp.ClientSession() as session:
+
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 data = {
                     'client_id': self.client_id,
                     'client_secret': self.client_secret,
@@ -173,7 +177,8 @@ class AmoCRMClient:
         """
         try:
             logger.info("🔄 Обмен authorization code на токены AmoCRM...")
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 data = {
                     'client_id': self.client_id,
                     'client_secret': self.client_secret,
@@ -216,7 +221,8 @@ class AmoCRMClient:
         try:
             logger.info(f"🔍 Поиск контакта в AmoCRM по телефону: {phone}")
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                 }
@@ -270,7 +276,8 @@ class AmoCRMClient:
         try:
             logger.info(f"🔍 Получение контакта ID: {contact_id}")
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                 }
@@ -344,7 +351,8 @@ class AmoCRMClient:
                 f"на значение: {value}"
             )
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                     'Content-Type': 'application/json',
@@ -406,7 +414,8 @@ class AmoCRMClient:
         try:
             logger.info(f"📝 Создание примечания для контакта {contact_id}")
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                     'Content-Type': 'application/json',
@@ -456,8 +465,9 @@ class AmoCRMClient:
         
         try:
             logger.info(f"🔍 Получение задачи ID: {task_id}")
-            
-            async with aiohttp.ClientSession() as session:
+
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                 }
@@ -494,8 +504,9 @@ class AmoCRMClient:
         
         try:
             logger.info(f"✅ Завершение задачи ID: {task_id}")
-            
-            async with aiohttp.ClientSession() as session:
+
+            timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {
                     'Authorization': f'Bearer {self.access_token}',
                     'Content-Type': 'application/json',

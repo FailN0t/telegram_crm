@@ -37,12 +37,47 @@ async def run_retention(now: Optional[datetime] = None) -> Dict[str, dict]:
                 cutoff = _cutoff(days, now)
                 if not cutoff:
                     continue
-                result = await session.execute(
-                    delete(model).where(model.created_at < cutoff)
-                )
-                deleted = result.rowcount or 0
+
+                # Fix #115: Batch DELETE по 1000 строк, чтобы не блокировать таблицу
+                total_deleted = 0
+                batch_size = 1000
+
+                while True:
+                    # Используем LIMIT для batch deletion
+                    # SQLAlchemy не поддерживает LIMIT на DELETE напрямую,
+                    # поэтому сначала SELECT id'ы, потом DELETE
+                    from sqlalchemy import select
+
+                    # Select batch of IDs to delete
+                    stmt = (
+                        select(model.id)
+                        .where(model.created_at < cutoff)
+                        .limit(batch_size)
+                    )
+                    result = await session.execute(stmt)
+                    ids_to_delete = [row[0] for row in result.fetchall()]
+
+                    if not ids_to_delete:
+                        break  # No more rows to delete
+
+                    # Delete batch
+                    delete_stmt = delete(model).where(model.id.in_(ids_to_delete))
+                    delete_result = await session.execute(delete_stmt)
+                    batch_deleted = delete_result.rowcount or 0
+                    total_deleted += batch_deleted
+
+                    await session.commit()  # Commit after each batch
+
+                    logger.debug(
+                        f"🗑️ Retention: deleted {batch_deleted} rows from {name} "
+                        f"(total: {total_deleted})"
+                    )
+
+                    if batch_deleted < batch_size:
+                        break  # Last batch was partial, we're done
+
                 results[name] = {
-                    "deleted": deleted,
+                    "deleted": total_deleted,
                     "cutoff": cutoff.isoformat() + "Z"
                 }
 

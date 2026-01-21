@@ -62,7 +62,6 @@
 
 | # | Проблема | Файл | Строки |
 |---|----------|------|--------|
-| 6 | Race condition в `set_bridge()` | `src/telegram_manager.py` | 24-30 |
 | 9 | Deadlock с SQLite lock | `src/outbox.py` | 85-125 |
 | 12 | Global bridge без синхронизации | `src/api_server.py` | 213, 3232-3236 |
 | 13 | Race condition в Lua скриптах при reload | `src/antispam.py` | 170-192 |
@@ -76,8 +75,6 @@
 | # | Проблема | Файл | Строки |
 |---|----------|------|--------|
 | 19 | Бесконечный цикл в SSE без таймаута | `src/api_server.py` | 2748-2823 |
-| 20 | Нет таймаута на HTTP запросы AmoCRM | `src/amocrm_client.py` | 81-110, 165-195 |
-| 21 | Нет таймаута на HTTP запросы Bitrix24 | `src/bitrix24_client.py` | 102-131, 304-329 |
 | 22 | Нет таймаута на `_warm_ui_chats()` | `src/telegram_client.py` | 177 |
 | 23 | Нет таймаута при инициализации CRM | `src/outbox_worker.py` | 129, 136 |
 
@@ -329,7 +326,6 @@
 
 | # | Проблема | Файл | Строки | Severity |
 |---|----------|------|--------|----------|
-| 115 | Retention DELETE без batch/limit (блокирует таблицу) | `src/retention.py` | 39-42 | HIGH |
 | 116 | UPDATE status в outbox без WHERE для version check | `src/outbox.py` | 111-114 | MEDIUM |
 
 ### Invalid Data / Foreign Keys
@@ -343,7 +339,6 @@
 | # | Проблема | Файл | Строки | Severity |
 |---|----------|------|--------|----------|
 | 121 | Redis availability кеш 30 сек (не узнает о восстановлении) | `src/redis_client.py` | 28-32 | MEDIUM |
-| 124 | `_acquire_next_outbox` UPDATE без version check | `src/outbox.py` | 111 | HIGH |
 
 ### Error Handling - Дополнительные
 
@@ -472,20 +467,20 @@ _Все проблемы в этом разделе исправлены_
 
 ## ИТОГО СТАТИСТИКА
 
-**Всего проблем:** 91 (было 110, исправлено 19 проблем)
+**Всего проблем:** 86 (было 110, исправлено 24 проблемы)
 
 ### Распределение по severity:
 
 | Severity | Количество |
 |----------|------------|
 | CRITICAL | 1 |
-| HIGH | 6 (было 16, исправлено 10: #2, #4, #5, #15, #17, #18, #112, #123, #159, #178) |
-| MEDIUM | 20 (было 22, исправлено 2: #111, #175) |
+| HIGH | 2 (было 16, исправлено 14: #2, #4, #5, #6, #15, #17, #18, #20, #21, #112, #115, #123, #124, #159, #178) |
+| MEDIUM | 19 (было 22, исправлено 3: #111, #116, #175) |
 | LOW | 7 |
 
-### ✅ УЖЕ ИСПРАВЛЕНО (Обновлено 2026-01-21 23:05):
+### ✅ УЖЕ ИСПРАВЛЕНО (Обновлено 2026-01-21 23:30):
 
-**Всего исправлено: 19 проблем**
+**Всего исправлено: 24 проблемы**
 
 | # | Проблема | Где исправлено | Решение | Дата |
 |---|----------|----------------|---------|------|
@@ -508,6 +503,11 @@ _Все проблемы в этом разделе исправлены_
 | **#169** | Публичные UI auth endpoints | `src/api_server.py:3239-3335` | ✅ Добавлен magic link authentication | 2026-01-20 |
 | **#175** | Session leak в outbox_worker exception handler | `src/outbox_worker.py:363-377` | ✅ Создание новой session в exception handler | 2026-01-21 |
 | **#178** | Per-user lock cleanup task никогда не стартует | `src/contact_manager.py:398-411`, `src/api_server.py:646-657` | ✅ Вызов `contact_manager.initialize()` при startup | 2026-01-21 |
+| **#6** | Race condition в `set_bridge()` | `src/telegram_manager.py:24-35` | ✅ Тот же фикс что #123 - async method + lock (verified via tests) | 2026-01-21 |
+| **#20** | Нет таймаута на HTTP запросы AmoCRM | `src/amocrm_client.py` (8 мест) | ✅ `timeout=aiohttp.ClientTimeout(total=30)` для всех HTTP запросов | 2026-01-21 |
+| **#21** | Нет таймаута на HTTP запросы Bitrix24 | `src/bitrix24_client.py` (3 места) | ✅ `timeout=aiohttp.ClientTimeout(total=30)` для всех HTTP запросов | 2026-01-21 |
+| **#115** | Retention DELETE без batch/limit | `src/retention.py:36-77` | ✅ Batch DELETE по 1000 строк с commit после каждого batch | 2026-01-21 |
+| **#124** | `_acquire_next_outbox` UPDATE без version check | `src/outbox.py:154-186` | ✅ Optimistic locking с `updated_at` как версия + WHERE clause | 2026-01-21 |
 
 ### ❌ КРИТИЧНО - осталось исправить (2 задачи):
 

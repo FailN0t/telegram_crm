@@ -7,7 +7,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import or_, and_, select
+from sqlalchemy import or_, and_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from src.config import settings
@@ -156,11 +156,36 @@ async def _acquire_next_outbox(db: AsyncSession, dialect_name: Optional[str]) ->
     if not outbox:
         return None
 
-    outbox.status = "processing"
-    outbox.updated_at = datetime.utcnow()
-    db.add(outbox)
+    # Fix #124: Optimistic locking - запомним original updated_at для version check
+    original_updated_at = outbox.updated_at
+    now = datetime.utcnow()
+
+    # Используем explicit UPDATE с WHERE clause для optimistic locking
+    update_stmt = (
+        update(MessageOutbox)
+        .where(
+            MessageOutbox.id == outbox.id,
+            MessageOutbox.updated_at == original_updated_at  # Version check
+        )
+        .values(
+            status="processing",
+            updated_at=now
+        )
+    )
+
+    update_result = await db.execute(update_stmt)
     await db.commit()
-    await db.refresh(outbox)
+
+    # Если UPDATE не обновил ни одной строки, значит кто-то другой уже взял эту запись
+    if update_result.rowcount == 0:
+        logger.debug(
+            f"⚠️ Outbox {outbox.id} был взят другим worker'ом (optimistic locking)"
+        )
+        return None
+
+    # Обновляем объект в памяти
+    outbox.status = "processing"
+    outbox.updated_at = now
     return outbox
 
 
