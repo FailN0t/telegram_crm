@@ -647,6 +647,13 @@ def create_app() -> FastAPI:
     async def startup():
         """Действия при запуске"""
         logger.info("🚀 API сервер запускается...")
+
+        # Fix #178: Initialize Contact Manager (starts cleanup task for locks)
+        try:
+            from src.contact_manager import contact_manager
+            await contact_manager.initialize()
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Contact Manager: {e}")
     
     @app.on_event("shutdown")
     async def shutdown():
