@@ -186,7 +186,7 @@ class OutboxWorker:
         self.bridge = CRMTelegramBridge(self.telegram_manager, self.crm)
 
         # Устанавливаем bridge в telegram_manager
-        self.telegram_manager.set_bridge(self.bridge)
+        await self.telegram_manager.set_bridge(self.bridge)  # Fix #123: await async method
         logger.info("✅ Bridge установлен в telegram_manager")
 
         # Теперь запускаем клиенты с уже установленным bridge

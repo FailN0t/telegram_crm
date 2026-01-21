@@ -21,13 +21,18 @@ class TelegramClientManager:
         self._lock = asyncio.Lock()
         self._bridge = None
 
-    def set_bridge(self, bridge):
-        """Установка bridge для обработки входящих сообщений"""
-        self._bridge = bridge
-        # Обновляем bridge во всех существующих клиентах
-        for client in self._clients.values():
-            client.bridge = bridge
-        logger.info("✅ Bridge установлен в TelegramClientManager и во всех клиентах")
+    async def set_bridge(self, bridge):
+        """
+        Установка bridge для обработки входящих сообщений.
+
+        Fix #123: Use lock to prevent race condition with concurrent client additions.
+        """
+        async with self._lock:
+            self._bridge = bridge
+            # Обновляем bridge во всех существующих клиентах
+            for client in self._clients.values():
+                client.bridge = bridge
+            logger.info("✅ Bridge установлен в TelegramClientManager и во всех клиентах")
 
     async def refresh_accounts(self, active_only: bool = True) -> List[TelegramAccount]:
         async with SessionLocal() as session:
@@ -71,23 +76,48 @@ class TelegramClientManager:
             return account_id
 
     async def get_client(self, account_id: int) -> MTProtoClient:
+        # Double-checked locking to prevent duplicate client creation
+        # First check without lock (fast path)
         if account_id in self._clients:
             return self._clients[account_id]
 
-        account = await self.get_account(account_id)
-        if not account:
-            raise ValueError(f"telegram account {account_id} not found")
+        # Acquire lock for client creation
+        async with self._lock:
+            # Double-check after acquiring lock (TOCTOU protection)
+            if account_id in self._clients:
+                return self._clients[account_id]
 
-        client = MTProtoClient(
-            account_id=account.id,
-            phone_number=account.phone_number,
-            session_string=account.session_string,
-            bridge=self._bridge
-        )
-        await client.start()
-        self._clients[account_id] = client
-        logger.info("✅ MTProto клиент запущен для account_id=%s", account_id)
-        return client
+            account = await self.get_account(account_id)
+            if not account:
+                raise ValueError(f"telegram account {account_id} not found")
+
+            client = MTProtoClient(
+                account_id=account.id,
+                phone_number=account.phone_number,
+                session_string=account.session_string,
+                bridge=self._bridge
+            )
+
+            # Wrap client.start() in try-except to prevent state corruption
+            # If start() fails, the client object is left in memory but not registered
+            # Next call would create a new client and fail again
+            try:
+                await client.start()
+            except Exception as exc:
+                # Rollback: clean up client resources to prevent memory leak
+                try:
+                    await client.stop()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                logger.error(
+                    f"❌ Не удалось запустить MTProto клиент для account_id={account_id}: {exc}"
+                )
+                # Re-raise to propagate error to caller
+                raise
+
+            self._clients[account_id] = client
+            logger.info("✅ MTProto клиент запущен для account_id=%s", account_id)
+            return client
 
     async def start_all(self) -> List[MTProtoClient]:
         await self.ensure_default_account()

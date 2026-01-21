@@ -100,7 +100,7 @@ class Application:
 
                 # Устанавливаем bridge в API сервере и TelegramClientManager
                 set_bridge(self.bridge)
-                self.telegram_manager.set_bridge(self.bridge)
+                await self.telegram_manager.set_bridge(self.bridge)  # Fix #123: await async method
                 logger.info("✅ Bridge установлен в telegram_manager")
 
                 # 5. Запуск Telegram клиентов (с уже установленным bridge!)

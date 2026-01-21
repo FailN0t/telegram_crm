@@ -513,15 +513,34 @@
 | MEDIUM | 22 |
 | LOW | 7 |
 
-### Топ-7 самых критичных для немедленного исправления:
+### ✅ УЖЕ ИСПРАВЛЕНО (Обновлено 2026-01-21):
 
-1. **Несинхронизированный refresh CRM токенов** (#14) - race под нагрузкой → 401/потеря токена
-2. **Нет обработки CRM API errors (5xx retries)** (#127) - CRM failures
-3. **Non-atomic check для mapping** (#10) - race condition
+| # | Проблема | Где исправлено | Решение |
+|---|----------|----------------|---------|
+| **#14** | Несинхронизированный refresh CRM токенов | `src/amocrm_client.py:113`, `src/bitrix24_client.py:135` | ✅ Double-checked locking с `asyncio.Lock()` |
+| **#127** | Нет обработки CRM API 5xx errors | `src/bitrix24_client.py:80`, `src/amocrm_client.py:62` | ✅ `@retry_async(config=CRM_API_RETRY)` с retry на (429, 500, 502, 503, 504) |
+| **#111** | enqueue_outbox commit без IntegrityError handling | `src/outbox.py:62-84` | ✅ try/except IntegrityError с rollback |
+| **#153** | Contact Manager `_recent_adds` без блокировки | `src/contact_manager.py` | ✅ Все доступы защищены locks (проверено тестами) |
+| **#169** | Публичные UI auth endpoints | `src/api_server.py:3239-3335` | ✅ Добавлен magic link authentication (более безопасная альтернатива) |
+
+### ❌ КРИТИЧНО - осталось исправить (6 задач):
+
+1. **#170 - Rate limit для `/api/ui/auth/*`** - endpoints без rate limiting → bruteforce attack
+2. **#172 - API_ALLOWED_IPS не применяется** - IP whitelist не работает
+3. **#10 - Non-atomic mapping creation** - race condition при создании mapping
+4. **#123 - set_bridge() без lock** - race condition при переключении аккаунтов
+5. **#112 - mark_outbox_result commit без rollback** - partial transaction
+6. **#114 - forward_to_open_line commit без try-catch** - partial transaction
+
+### Топ-7 самых критичных (ОБНОВЛЕНО):
+
+1. ~~**Несинхронизированный refresh CRM токенов** (#14)~~ - ✅ ИСПРАВЛЕНО
+2. ~~**Нет обработки CRM API errors (5xx retries)** (#127)~~ - ✅ ИСПРАВЛЕНО
+3. **Non-atomic check для mapping** (#10) - ❌ НЕ ИСПРАВЛЕНО
 4. **Deadlock с SQLite lock** (#9) - блокировка обработки (использовать PostgreSQL)
-5. **Contact Manager: `_recent_adds` без блокировки** (#153) - race condition
-6. **Security: Публичные UI auth endpoints** (#169, #170, #172) - утечка данных
-7. **`set_bridge()` изменяет state без lock** (#123) - race condition
+5. ~~**Contact Manager: `_recent_adds` без блокировки** (#153)~~ - ✅ ИСПРАВЛЕНО
+6. **Security: UI auth endpoints** (#170, #172) - ❌ ЧАСТИЧНО (#169 исправлен, #170, #172 остались)
+7. **`set_bridge()` изменяет state без lock** (#123) - ❌ НЕ ИСПРАВЛЕНО
 
 ---
 

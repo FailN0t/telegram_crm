@@ -6,6 +6,7 @@ Bridge между CRM (AmoCRM/Bitrix24) и Telegram
 from typing import Tuple, Optional, Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 
 from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
@@ -253,7 +254,16 @@ class CRMTelegramBridge:
                 mapping.telegram_chat_id = user.id
                 mapping.telegram_username = user.username
                 mapping.is_active = True
-            await db.commit()
+
+            # Flush чтобы получить mapping.id (без commit)
+            await db.flush()
+
+            # Validate mapping.id before creating history (prevent FK constraint violation)
+            if not mapping.id or mapping.id <= 0:
+                logger.error(
+                    f"❌ Cannot create MessageHistory: invalid mapping.id={mapping.id}"
+                )
+                raise ValueError(f"Invalid chat_mapping_id: {mapping.id}")
 
             # Сохраняем сообщение в историю
             history = MessageHistory(
@@ -267,6 +277,8 @@ class CRMTelegramBridge:
                 status='sent'
             )
             db.add(history)
+
+            # Один commit для mapping И history (транзакционность)
             await db.commit()
 
             # Обновляем поле chat_id в CRM
@@ -288,10 +300,11 @@ class CRMTelegramBridge:
             )
 
             # Если FloodWait - сохраняем в БД для повторной отправки
-            if "FloodWait" in result:
+            # Only save if we have valid mapping (prevent FK constraint violation)
+            if "FloodWait" in result and mapping and mapping.id and mapping.id > 0:
                 history = MessageHistory(
                     account_id=account_id,
-                    chat_mapping_id=mapping.id if mapping else 0,
+                    chat_mapping_id=mapping.id,
                     amocrm_contact_id=contact_id,
                     direction='outbound',
                     message_text=message,
@@ -302,6 +315,11 @@ class CRMTelegramBridge:
                 )
                 db.add(history)
                 await db.commit()
+            elif "FloodWait" in result:
+                logger.warning(
+                    f"⚠️ FloodWait error but cannot save MessageHistory: "
+                    f"mapping.id={mapping.id if mapping else None}"
+                )
 
         return success, result
 
@@ -553,8 +571,10 @@ class CRMTelegramBridge:
         telegram_chat_id: int,
         telegram_user_id: int,
         user_name: str,
+        phone: Optional[str],
         message_text: str,
-        message_id: Optional[int] = None
+        message_id: Optional[int] = None,
+        account_id: Optional[int] = None
     ) -> Tuple[bool, str]:
         """
         Пересылка сообщения из Telegram в Bitrix24 Open Line
@@ -566,8 +586,10 @@ class CRMTelegramBridge:
             telegram_chat_id: ID чата Telegram (используется как внешний chat_id)
             telegram_user_id: ID пользователя Telegram (используется как внешний user_id)
             user_name: Имя пользователя для отображения в Bitrix24
+            phone: Номер телефона (может быть None)
             message_text: Текст сообщения
             message_id: ID сообщения в Telegram (опционально)
+            account_id: ID аккаунта Telegram (опционально, для multi-account)
 
         Returns:
             (success, message): Результат отправки
@@ -616,20 +638,55 @@ class CRMTelegramBridge:
             contact_id = await self.crm.create_contact(
                 first_name=first_name,
                 last_name=last_name,
+                phone=phone,  # Передаём телефон (может быть None)
                 telegram_chat_id=telegram_chat_id
             )
 
             if contact_id:
-                # Создаем mapping
+                # Получаем account_id (fallback на default если не передан)
+                if not account_id:
+                    account_id = await self.telegram.get_default_account_id()
+                    if not account_id:
+                        logger.warning("⚠️ Не удалось получить account_id, используем 1 как fallback")
+                        account_id = 1
+
+                # Fix #10: Optimistic INSERT для mapping (atomic operation)
+                # Fix #114: Wrap commit in try/except for proper error handling
                 new_mapping = ChatMapping(
-                    account_id=1,  # TODO: получить account_id из контекста
+                    account_id=account_id,
                     telegram_chat_id=telegram_chat_id,
                     amocrm_contact_id=contact_id,
                     is_active=True
                 )
                 db.add(new_mapping)
-                await db.commit()
-                logger.info(f"✅ Создан контакт {contact_id} и mapping для chat_id={telegram_chat_id}")
+
+                try:
+                    await db.commit()
+                    logger.info(f"✅ Создан контакт {contact_id} и mapping для chat_id={telegram_chat_id}")
+                    mapping = new_mapping  # Update mapping reference for later use
+                except IntegrityError as e:
+                    # Race condition: another request created mapping concurrently
+                    await db.rollback()
+                    logger.debug(f"ℹ️ Duplicate mapping for chat_id={telegram_chat_id}, fetching existing")
+
+                    # Fetch existing mapping
+                    result = await db.execute(
+                        select(ChatMapping).filter_by(telegram_chat_id=telegram_chat_id)
+                    )
+                    mapping = result.scalars().first()
+
+                    if mapping:
+                        contact_id = mapping.amocrm_contact_id
+                        logger.info(f"✅ Использован существующий mapping: contact_id={contact_id}")
+                    else:
+                        # Edge case: IntegrityError for different reason
+                        logger.error(f"❌ IntegrityError но mapping не найден: {e}")
+                        raise
+                except Exception as e:
+                    # Fix #114: Catch any other commit errors
+                    await db.rollback()
+                    logger.error(f"❌ Ошибка сохранения mapping: {e}")
+                    raise
             else:
                 logger.warning(f"⚠️ Не удалось создать контакт для chat_id={telegram_chat_id}")
 
@@ -647,9 +704,10 @@ class CRMTelegramBridge:
             if result:
                 logger.info(f"✅ Сообщение переслано в Open Line")
 
-                # Получаем ID сообщения из результата для отправки статусов
-                # Структура ответа: {"DATA": {"RESULT": [{"message": {"id": "XX"}}]}}
+                # Получаем ID сообщения и chat_id из результата для отправки статусов
+                # Структура ответа: {"DATA": {"RESULT": [{"message": {"id": "XX"}, "chat": {"id": "YY"}}]}}
                 bitrix_message_id = None
+                bitrix_chat_id = None
                 if isinstance(result, dict):
                     try:
                         data = result.get("DATA", {})
@@ -657,35 +715,49 @@ class CRMTelegramBridge:
                         if results and len(results) > 0:
                             first_result = results[0]
                             message_data = first_result.get("message", {})
+                            chat_data = first_result.get("chat", {})
                             bitrix_message_id = message_data.get("id")
-                            logger.info(f"🔍 Извлечен message_id из структуры Bitrix24: {bitrix_message_id}")
+                            bitrix_chat_id = chat_data.get("id")
+                            logger.info(f"🔍 Извлечены IDs из Bitrix24: message_id={bitrix_message_id}, chat_id={bitrix_chat_id}")
                     except (KeyError, IndexError, TypeError) as e:
-                        logger.warning(f"⚠️ Ошибка парсинга message_id: {e}")
+                        logger.warning(f"⚠️ Ошибка парсинга IDs: {e}")
 
                 # ВАЖНО: Отправляем статусы доставки и прочтения
                 # Без этого Bitrix24 не будет отправлять ONIMCONNECTORMESSAGEADD для ответов оператора!
-                if bitrix_message_id:
+                if bitrix_message_id and bitrix_chat_id:
                     try:
+                        # Формат согласно официальной документации Bitrix24
+                        messages = [{
+                            "im": {
+                                "chat_id": str(bitrix_chat_id),
+                                "message_id": str(bitrix_message_id)
+                            },
+                            "message": {
+                                "id": str(bitrix_message_id)
+                            },
+                            "chat": {
+                                "id": str(telegram_chat_id)
+                            }
+                        }]
+
                         # Статус доставки
                         await self.crm.send_status_delivery(
                             connector_id=settings.BITRIX24_CONNECTOR_ID,
                             line_id=settings.BITRIX24_LINE_ID,
-                            message_ids=[str(bitrix_message_id)]
+                            messages=messages
                         )
                         logger.info(f"✅ Отправлен статус доставки для message_id={bitrix_message_id}")
 
-                        # Статус прочтения (требует chat_id)
-                        await self.crm.send_status_reading(
-                            connector_id=settings.BITRIX24_CONNECTOR_ID,
-                            line_id=settings.BITRIX24_LINE_ID,
-                            chat_id=str(telegram_chat_id),
-                            message_ids=[str(bitrix_message_id)]
-                        )
-                        logger.info(f"✅ Отправлен статус прочтения для message_id={bitrix_message_id}")
+                        # Статус прочтения НЕ отправляем сразу
+                        # Входящие сообщения от пользователя в Telegram прочитываются автоматически
+                        # Не имеет смысла отправлять reading status для входящих сообщений
                     except Exception as e:
                         logger.warning(f"⚠️ Не удалось отправить статусы: {e}")
                 else:
-                    logger.warning(f"⚠️ Не удалось извлечь message_id из результата: {result}")
+                    if not bitrix_message_id:
+                        logger.warning(f"⚠️ Не удалось извлечь message_id из результата")
+                    if not bitrix_chat_id:
+                        logger.warning(f"⚠️ Не удалось извлечь chat_id из результата")
 
                 # Пытаемся привязать чат к контакту CRM (если есть contact_id)
                 if contact_id:
@@ -717,8 +789,10 @@ class CRMTelegramBridge:
         user_first_name: str,
         user_last_name: Optional[str],
         username: Optional[str],
+        phone: Optional[str],
         message_text: str,
-        message_id: int
+        message_id: int,
+        account_id: Optional[int] = None
     ) -> Tuple[bool, str]:
         """
         Обработка входящего сообщения из Telegram
@@ -733,8 +807,10 @@ class CRMTelegramBridge:
             user_first_name: Имя пользователя
             user_last_name: Фамилия пользователя
             username: Username в Telegram
+            phone: Номер телефона (может быть None если скрыт privacy settings)
             message_text: Текст сообщения
             message_id: ID сообщения
+            account_id: ID аккаунта Telegram (опционально, для multi-account)
 
         Returns:
             (success, message): Результат обработки
@@ -757,8 +833,10 @@ class CRMTelegramBridge:
                 telegram_chat_id,
                 telegram_user_id,
                 user_name,
+                phone,  # Передаём телефон
                 message_text,
-                message_id
+                message_id,
+                account_id  # Передаём account_id для multi-account
             )
 
         # Для AmoCRM или без Open Channels - только примечание в CRM
