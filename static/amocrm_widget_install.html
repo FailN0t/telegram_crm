@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Установка Telegram Widget для AmoCRM</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #0077ff 0%, #00d4ff 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 30px;
+        }
+        .step {
+            background: #f5f5f5;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border-left: 4px solid #0077ff;
+        }
+        .step-number {
+            display: inline-block;
+            background: #0077ff;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .step h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 18px;
+        }
+        .step p {
+            margin: 10px 0;
+            color: #666;
+            line-height: 1.6;
+        }
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f8;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+        .copy-btn {
+            background: #0077ff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .copy-btn:hover {
+            background: #0066dd;
+        }
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .warning p {
+            margin: 0;
+            color: #856404;
+        }
+        .success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .success p {
+            margin: 0;
+            color: #155724;
+        }
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: white;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .config-label {
+            font-weight: 600;
+            color: #333;
+        }
+        .config-value {
+            color: #666;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            <span>📱</span>
+            Установка Telegram Widget для AmoCRM
+        </h1>
+        <div class="subtitle">
+            Интеграция Telegram с AmoCRM - общайтесь с клиентами прямо из карточки контакта
+        </div>
+
+        <div class="warning">
+            <p><strong>⚠️ Внимание:</strong> Для установки widget необходимы права администратора в AmoCRM.</p>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">1</span>Регистрация интеграции в AmoCRM</h3>
+            <p>Перейдите в раздел <strong>Настройки → Интеграции → Создать интеграцию</strong> в вашем аккаунте AmoCRM.</p>
+            <p>Заполните основную информацию:</p>
+            <div class="config-item">
+                <span class="config-label">Название:</span>
+                <span class="config-value">Telegram CRM</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Тип:</span>
+                <span class="config-value">Widget (виджет)</span>
+            </div>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">2</span>Настройка OAuth</h3>
+            <p>В разделе OAuth настройте следующие параметры:</p>
+            <div class="config-item">
+                <span class="config-label">Redirect URI:</span>
+                <span class="config-value" id="redirect-uri"></span>
+                <button class="copy-btn" onclick="copyToClipboard('redirect-uri')">Копировать</button>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Client ID:</span>
+                <span class="config-value">Скопируйте после создания</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Client Secret:</span>
+                <span class="config-value">Скопируйте после создания</span>
+            </div>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">3</span>Настройка Widget</h3>
+            <p>Добавьте widget с следующими параметрами:</p>
+            <div class="config-item">
+                <span class="config-label">Размещение:</span>
+                <span class="config-value">Карточка контакта (отдельная вкладка)</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">URL iframe:</span>
+                <span class="config-value" id="widget-url"></span>
+                <button class="copy-btn" onclick="copyToClipboard('widget-url')">Копировать</button>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Название вкладки:</span>
+                <span class="config-value">Telegram</span>
+            </div>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">4</span>Настройка Webhook</h3>
+            <p>Для получения событий от AmoCRM настройте webhook:</p>
+            <div class="config-item">
+                <span class="config-label">Webhook URL:</span>
+                <span class="config-value" id="webhook-url"></span>
+                <button class="copy-btn" onclick="copyToClipboard('webhook-url')">Копировать</button>
+            </div>
+            <p>Включите события:</p>
+            <ul>
+                <li>notes.add (примечания)</li>
+                <li>contacts.update (обновление контактов)</li>
+            </ul>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">5</span>Настройка пользовательских полей</h3>
+            <p>Создайте следующие поля в контактах AmoCRM:</p>
+            <div class="config-item">
+                <span class="config-label">telegram_username:</span>
+                <span class="config-value">Текстовое поле для @username</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">telegram_chat_id:</span>
+                <span class="config-value">Числовое поле для ID чата</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">telegram_consent:</span>
+                <span class="config-value">Переключатель (согласие на рассылку)</span>
+            </div>
+        </div>
+
+        <div class="success">
+            <p><strong>✅ Готово!</strong> После завершения настройки widget появится в карточках контактов на отдельной вкладке "Telegram".</p>
+        </div>
+
+        <div class="step">
+            <h3>Как использовать</h3>
+            <p>1. Откройте карточку контакта в AmoCRM</p>
+            <p>2. Перейдите на вкладку "Telegram"</p>
+            <p>3. Отправляйте сообщения клиентам прямо из карточки</p>
+            <p>4. Входящие сообщения будут автоматически отображаться в истории</p>
+        </div>
+    </div>
+
+    <script>
+        // Получаем текущий домен
+        const currentHost = window.location.origin;
+
+        // Устанавливаем значения
+        document.getElementById('redirect-uri').textContent = currentHost + '/api/amocrm/callback';
+        document.getElementById('widget-url').textContent = currentHost + '/api/amocrm/widget/chat?contact_id={{contact.id}}';
+        document.getElementById('webhook-url').textContent = currentHost + '/api/webhook/amocrm';
+
+        // Функция копирования
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const text = element.textContent;
+
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = element.nextElementSibling;
+                const originalText = btn.textContent;
+                btn.textContent = 'Скопировано!';
+                btn.style.background = '#28a745';
+
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '#0077ff';
+                }, 2000);
+            }).catch(err => {
+                alert('Ошибка копирования: ' + err);
+            });
+        }
+    </script>
+</body>
+</html>

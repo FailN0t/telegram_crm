@@ -1010,7 +1010,40 @@ def create_app() -> FastAPI:
                             "queued": created,
                             "outbox_id": outbox.id
                         })
-            
+
+            # Обработка примечаний (notes) с тегом #telegram
+            if 'notes' in body and 'add' in body['notes']:
+                for note_data in body['notes']['add']:
+                    note_info = note_data.get('note', {})
+                    note_text = note_info.get('text', '')
+                    note_type = note_info.get('note_type')
+                    entity_id = note_data.get('entity_id')  # contact_id или lead_id
+
+                    # Проверить тег #telegram или специальный note_type
+                    if '#telegram' in note_text or note_type == 'telegram':
+                        if entity_id:
+                            # Удалить тег из текста
+                            clean_message = note_text.replace('#telegram', '').strip()
+
+                            if clean_message:
+                                logger.info(f"📝 Отправка сообщения из примечания AmoCRM для контакта {entity_id}")
+
+                                # Отправить через bridge
+                                success, result = await bridge.send_message_from_crm(
+                                    db,
+                                    contact_id=entity_id,
+                                    phone=None,  # Bridge найдёт из mapping или custom fields
+                                    username=None,
+                                    message=clean_message
+                                )
+
+                                results.append({
+                                    "note_id": note_data.get('id'),
+                                    "contact_id": entity_id,
+                                    "sent": success,
+                                    "result": str(result) if result else None
+                                })
+
             return {
                 "success": True,
                 "processed": len(results),
@@ -2396,6 +2429,314 @@ def create_app() -> FastAPI:
         if not success:
             return RedirectResponse(url="/admin/settings?amocrm=error")
         return RedirectResponse(url="/admin/settings?amocrm=success")
+
+    # =========================================================================
+    # AmoCRM Widget Endpoints
+    # =========================================================================
+
+    @app.get("/api/amocrm/widget/install", tags=["AmoCRM Widget"])
+    async def amocrm_widget_install():
+        """
+        Страница с инструкциями по установке AmoCRM Widget
+        """
+        return FileResponse("static/amocrm_widget_install.html")
+
+    @app.get("/api/amocrm/widget/chat", tags=["AmoCRM Widget"])
+    async def amocrm_widget_chat(
+        contact_id: int,
+        account_id: Optional[int] = None,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """
+        HTML widget для чата с контактом в AmoCRM
+        Загружается через iframe в карточке контакта
+        """
+        _ensure_crm_ready()
+
+        if not bridge or not bridge.crm or not isinstance(bridge.crm, AmoCRMClient):
+            raise HTTPException(status_code=503, detail="AmoCRM not configured")
+
+        # Получить информацию о контакте из AmoCRM
+        contact = await bridge.crm.find_contact_by_id(contact_id)
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        # Извлечь данные контакта
+        contact_name = contact.get('name', 'Контакт')
+        phone = None
+        username = None
+
+        # Получить custom fields
+        custom_fields = contact.get('custom_fields_values', [])
+        for field in custom_fields:
+            field_id = field.get('field_id')
+            if field_id == settings.AMOCRM_FIELD_TELEGRAM_USERNAME:
+                values = field.get('values', [])
+                if values:
+                    username = values[0].get('value')
+            elif field.get('field_code') == 'PHONE':
+                values = field.get('values', [])
+                if values:
+                    phone = values[0].get('value')
+
+        # Получить историю сообщений
+        # Найти mapping по amocrm_contact_id
+        result = await db.execute(
+            select(ChatMapping).filter_by(amocrm_contact_id=contact_id)
+        )
+        mapping = result.scalars().first()
+
+        messages = []
+        if mapping:
+            # Загрузить историю из UiMessageHistory
+            result = await db.execute(
+                select(UiMessageHistory)
+                .filter_by(chat_id=mapping.telegram_chat_id)
+                .order_by(UiMessageHistory.created_at.desc())
+                .limit(50)
+            )
+            messages = result.scalars().all()
+            messages = list(reversed(messages))  # Старые первыми
+
+        # Вернуть HTML widget
+        return HTMLResponse(content=f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Chat</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; }}
+        .chat-header {{ padding: 12px; background: #5c7cfa; color: white; }}
+        .chat-header h3 {{ font-size: 16px; margin-bottom: 4px; }}
+        .chat-header p {{ font-size: 12px; opacity: 0.9; }}
+        .chat-messages {{ flex: 1; overflow-y: auto; padding: 12px; background: #f5f5f5; }}
+        .message {{ margin-bottom: 12px; display: flex; }}
+        .message.outgoing {{ justify-content: flex-end; }}
+        .message-bubble {{ max-width: 70%; padding: 8px 12px; border-radius: 12px; word-wrap: break-word; }}
+        .message.incoming .message-bubble {{ background: white; border-bottom-left-radius: 4px; }}
+        .message.outgoing .message-bubble {{ background: #5c7cfa; color: white; border-bottom-right-radius: 4px; }}
+        .message-meta {{ font-size: 11px; opacity: 0.7; margin-top: 4px; }}
+        .chat-composer {{ padding: 12px; background: white; border-top: 1px solid #e0e0e0; }}
+        .composer-form {{ display: flex; gap: 8px; }}
+        .composer-form textarea {{ flex: 1; padding: 8px; border: 1px solid #e0e0e0; border-radius: 8px; resize: none; font-family: inherit; }}
+        .composer-form button {{ padding: 8px 16px; background: #5c7cfa; color: white; border: none; border-radius: 8px; cursor: pointer; }}
+        .composer-form button:hover {{ background: #4263eb; }}
+        .composer-form button:disabled {{ background: #ccc; cursor: not-allowed; }}
+        .status-icon {{ margin-left: 4px; }}
+        .loading {{ text-align: center; padding: 12px; color: #999; }}
+    </style>
+</head>
+<body>
+    <div class="chat-header">
+        <h3 id="contact-name">{contact_name}</h3>
+        <p id="contact-info">{phone or username or 'Telegram'}</p>
+    </div>
+
+    <div class="chat-messages" id="messages">
+        {"".join([
+            f'''<div class="message {'outgoing' if msg.is_outgoing else 'incoming'}">
+                <div class="message-bubble">
+                    {msg.message_text}
+                    <div class="message-meta">
+                        {msg.created_at.strftime('%H:%M')}
+                        {f'<span class="status-icon">✓</span>' if msg.is_outgoing and msg.status == 'sent' else ''}
+                    </div>
+                </div>
+            </div>'''
+            for msg in messages
+        ])}
+    </div>
+
+    <div class="chat-composer">
+        <form class="composer-form" onsubmit="sendMessage(event)">
+            <textarea
+                id="message-input"
+                placeholder="Напишите сообщение..."
+                rows="2"
+                onkeydown="if(event.key==='Enter' && !event.shiftKey){{event.preventDefault();sendMessage(event);}}"
+            ></textarea>
+            <button type="submit" id="send-btn">Отправить</button>
+        </form>
+    </div>
+
+    <script>
+        const contactId = {contact_id};
+        const phone = {f"'{phone}'" if phone else 'null'};
+        const username = {f"'{username}'" if username else 'null'};
+        let pollInterval = null;
+
+        async function sendMessage(event) {{
+            event.preventDefault();
+            const input = document.getElementById('message-input');
+            const btn = document.getElementById('send-btn');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            btn.disabled = true;
+            input.disabled = true;
+
+            try {{
+                const response = await fetch('/api/amocrm/widget/send', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        contact_id: contactId,
+                        message: message,
+                        phone: phone,
+                        username: username
+                    }})
+                }});
+
+                if (response.ok) {{
+                    input.value = '';
+                    loadHistory();
+                }} else {{
+                    alert('Ошибка отправки сообщения');
+                }}
+            }} catch (error) {{
+                console.error('Error:', error);
+                alert('Ошибка отправки');
+            }} finally {{
+                btn.disabled = false;
+                input.disabled = false;
+                input.focus();
+            }}
+        }}
+
+        async function loadHistory() {{
+            try {{
+                const response = await fetch(`/api/amocrm/widget/history?contact_id=${{contactId}}&limit=50`);
+                if (!response.ok) return;
+
+                const data = await response.json();
+                renderMessages(data.messages || []);
+            }} catch (error) {{
+                console.error('Load error:', error);
+            }}
+        }}
+
+        function renderMessages(messages) {{
+            const container = document.getElementById('messages');
+            container.innerHTML = messages.map(msg => `
+                <div class="message ${{msg.is_outgoing ? 'outgoing' : 'incoming'}}">
+                    <div class="message-bubble">
+                        ${{msg.message_text}}
+                        <div class="message-meta">
+                            ${{new Date(msg.created_at).toLocaleTimeString('ru-RU', {{hour: '2-digit', minute: '2-digit'}})}}
+                            ${{msg.is_outgoing && msg.status === 'sent' ? '<span class="status-icon">✓</span>' : ''}}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }}
+
+        function startPolling() {{
+            pollInterval = setInterval(loadHistory, 5000);
+        }}
+
+        function stopPolling() {{
+            if (pollInterval) clearInterval(pollInterval);
+        }}
+
+        // Start polling on load
+        startPolling();
+
+        // Stop polling when page unloads
+        window.addEventListener('beforeunload', stopPolling);
+
+        // Scroll to bottom on load
+        const messagesDiv = document.getElementById('messages');
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    </script>
+</body>
+</html>
+        """)
+
+    @app.post("/api/amocrm/widget/send", tags=["AmoCRM Widget"])
+    async def amocrm_widget_send(
+        request: Request,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """Отправка сообщения из AmoCRM widget"""
+        _ensure_crm_ready()
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        contact_id = body.get("contact_id")
+        message = body.get("message", "").strip()
+        phone = body.get("phone")
+        username = body.get("username")
+
+        if not contact_id or not message:
+            raise HTTPException(status_code=400, detail="contact_id and message required")
+
+        # Отправить через bridge
+        success, result = await bridge.send_message_from_crm(
+            db,
+            contact_id=contact_id,
+            phone=phone,
+            username=username,
+            message=message
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail=result)
+
+        return {
+            "success": True,
+            "message": "Message queued for delivery"
+        }
+
+    @app.get("/api/amocrm/widget/history", tags=["AmoCRM Widget"])
+    async def amocrm_widget_history(
+        contact_id: int,
+        limit: int = 50,
+        offset: int = 0,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """Получить историю сообщений для контакта"""
+        # Найти mapping по amocrm_contact_id
+        result = await db.execute(
+            select(ChatMapping).filter_by(amocrm_contact_id=contact_id)
+        )
+        mapping = result.scalars().first()
+
+        if not mapping:
+            return {"messages": []}
+
+        # Загрузить историю
+        result = await db.execute(
+            select(UiMessageHistory)
+            .filter_by(chat_id=mapping.telegram_chat_id)
+            .order_by(UiMessageHistory.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        messages = result.scalars().all()
+        messages = list(reversed(messages))  # Старые первыми
+
+        return {
+            "messages": [
+                {
+                    "id": msg.id,
+                    "message_text": msg.message_text,
+                    "is_outgoing": msg.is_outgoing,
+                    "status": msg.status,
+                    "created_at": msg.created_at.isoformat(),
+                }
+                for msg in messages
+            ]
+        }
 
     @app.get("/api/admin/bitrix24/status", tags=["Admin"])
     async def admin_bitrix24_status(ui_user: dict = Depends(require_admin)):

@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from src.telegram_manager import TelegramClientManager
 from src.amocrm_client import AmoCRMClient
 from src.bitrix24_client import Bitrix24Client
-from src.database import ChatMapping, MessageHistory
+from src.database import ChatMapping, MessageHistory, UiMessageHistory
 from src.config import settings
 from src.logger import logger
 
@@ -845,14 +845,30 @@ class CRMTelegramBridge:
         )
         mapping = mapping_result.scalars().first()
 
+        # Сохранить входящее сообщение в UiMessageHistory для widget
+        ui_msg = UiMessageHistory(
+            account_id=account_id or (await self.telegram.get_default_account_id()),
+            chat_id=telegram_chat_id,
+            direction="inbound",
+            message_text=message_text,
+            message_type="text",
+            username=username or "",
+            display_name=user_name,
+            status='received'
+        )
+        db.add(ui_msg)
+
+        # Создать примечание в AmoCRM если есть связь с контактом
         if mapping and mapping.amocrm_contact_id and self.crm:
             await self._create_crm_note(
                 mapping.amocrm_contact_id,
                 f"📥 Входящее от {user_name}: {message_text[:200]}{'...' if len(message_text) > 200 else ''}"
             )
+            await db.commit()
             return True, "Note created in CRM"
 
-        return True, "No CRM action needed"
+        await db.commit()
+        return True, "Message saved to UI history"
 
 
 # Алиас для обратной совместимости

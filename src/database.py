@@ -523,6 +523,7 @@ class UiMessageHistory(Base):
     username = Column(String(255))
     display_name = Column(String(255))
     status = Column(String(20), default='sent')
+    delivery_status = Column(String(20), default='queued')  # queued, sent, delivered, read, failed
     error_message = Column(Text)
     media_url = Column(Text)
     media_name = Column(String(255))
