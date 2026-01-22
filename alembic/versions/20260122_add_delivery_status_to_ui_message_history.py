@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "20260122_add_delivery_status_to_ui_message_history"
-down_revision = "20260121_add_ui_auth_attempts_table"
+down_revision = ("20260116_add_index_tuning", "20260120_add_read_at")  # Merge migration
 branch_labels = None
 depends_on = None
 
