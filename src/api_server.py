@@ -2447,7 +2447,7 @@ def create_app() -> FastAPI:
         Скачать архив виджета для установки в AmoCRM
         """
         return FileResponse(
-            "telegram_crm_widget.zip",
+            "static/telegram_crm_widget.zip",
             media_type="application/zip",
             filename="telegram_crm_widget.zip"
         )
