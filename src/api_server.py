@@ -2446,8 +2446,10 @@ def create_app() -> FastAPI:
         """
         Скачать архив виджета для установки в AmoCRM
         """
+        import os
+        widget_path = os.path.join(os.path.dirname(__file__), "..", "static", "telegram_crm_widget.zip")
         return FileResponse(
-            "static/telegram_crm_widget.zip",
+            widget_path,
             media_type="application/zip",
             filename="telegram_crm_widget.zip"
         )
