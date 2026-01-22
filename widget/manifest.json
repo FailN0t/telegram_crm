@@ -1,0 +1,33 @@
+{
+  "widget": {
+    "name": "Telegram CRM Widget",
+    "description": "Чат с клиентами в Telegram",
+    "short_description": "Telegram чат",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": false,
+    "locale": [
+      "ru"
+    ],
+    "tour": {
+      "is_tour": false
+    },
+    "installation": true,
+    "support": {
+      "link": "https://your-server.example.com/api/amocrm/widget/install",
+      "email": "support@example.com"
+    },
+    "settings": {
+      "login": "",
+      "name": "telegram_crm_widget",
+      "templates": {
+        "common": {}
+      }
+    },
+    "locations": [
+      "lcard-1",
+      "ccard-1",
+      "comcard-1"
+    ]
+  }
+}
