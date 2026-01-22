@@ -173,9 +173,43 @@
             </div>
         </div>
 
+        <div class="success">
+            <p><strong>✅ Способ 1: Загрузка виджета в AmoCRM (рекомендуется)</strong></p>
+        </div>
+
         <div class="step">
-            <h3><span class="step-number">3</span>Настройка Widget</h3>
-            <p>Добавьте widget с следующими параметрами:</p>
+            <h3><span class="step-number">3</span>Скачать и установить виджет</h3>
+            <p>Виджет позволяет встроить чат Telegram прямо в карточку контакта.</p>
+
+            <div class="config-item" style="margin: 20px 0;">
+                <a href="/api/amocrm/widget/download"
+                   download="telegram_crm_widget.zip"
+                   style="display: inline-block; background: #28a745; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+                    📥 Скачать виджет (telegram_crm_widget.zip)
+                </a>
+            </div>
+
+            <p><strong>Установка:</strong></p>
+            <ol style="line-height: 1.8;">
+                <li>Перейдите в AmoCRM: <strong>Настройки → API → Виджеты</strong></li>
+                <li>Нажмите кнопку <strong>"Добавить виджет"</strong> (внизу страницы)</li>
+                <li>Загрузите скачанный файл <code>telegram_crm_widget.zip</code></li>
+                <li>Нажмите <strong>"Установить"</strong></li>
+                <li>Виджет появится в карточках контактов автоматически</li>
+            </ol>
+
+            <div class="warning">
+                <p><strong>💡 Примечание:</strong> После установки виджет будет автоматически отображаться в правой панели карточек контактов, сделок и компаний.</p>
+            </div>
+        </div>
+
+        <div class="success" style="margin-top: 40px;">
+            <p><strong>✅ Способ 2: Прямой iframe (альтернатива)</strong></p>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">4</span>Альтернатива: Прямой iframe</h3>
+            <p>Если не хотите загружать виджет, можете использовать прямой iframe:</p>
             <div class="config-item">
                 <span class="config-label">Размещение:</span>
                 <span class="config-value">Карточка контакта (отдельная вкладка)</span>
@@ -192,7 +226,7 @@
         </div>
 
         <div class="step">
-            <h3><span class="step-number">4</span>Настройка Webhook</h3>
+            <h3><span class="step-number">5</span>Настройка Webhook</h3>
             <p>Для получения событий от AmoCRM настройте webhook:</p>
             <div class="config-item">
                 <span class="config-label">Webhook URL:</span>
@@ -207,7 +241,7 @@
         </div>
 
         <div class="step">
-            <h3><span class="step-number">5</span>Настройка пользовательских полей</h3>
+            <h3><span class="step-number">6</span>Настройка пользовательских полей</h3>
             <p>Создайте следующие поля в контактах AmoCRM:</p>
             <div class="config-item">
                 <span class="config-label">telegram_username:</span>

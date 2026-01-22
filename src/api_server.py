@@ -2441,6 +2441,17 @@ def create_app() -> FastAPI:
         """
         return FileResponse("static/amocrm_widget_install.html")
 
+    @app.get("/api/amocrm/widget/download", tags=["AmoCRM Widget"])
+    async def amocrm_widget_download():
+        """
+        Скачать архив виджета для установки в AmoCRM
+        """
+        return FileResponse(
+            "telegram_crm_widget.zip",
+            media_type="application/zip",
+            filename="telegram_crm_widget.zip"
+        )
+
     @app.get("/api/amocrm/widget/chat", tags=["AmoCRM Widget"])
     async def amocrm_widget_chat(
         contact_id: int,
