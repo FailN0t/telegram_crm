@@ -131,55 +131,100 @@
     <div class="container">
         <h1>
             <span>📱</span>
-            Установка Telegram Widget для AmoCRM
+            Telegram CRM для AmoCRM
         </h1>
         <div class="subtitle">
-            Интеграция Telegram с AmoCRM - общайтесь с клиентами прямо из карточки контакта
+            Интеграция Telegram с AmoCRM - отправляйте сообщения клиентам и получайте ответы
+        </div>
+
+        <div class="success">
+            <p><strong>✅ Текущий статус:</strong> Интеграция работает! Вы можете отправлять сообщения через примечания с тегом #telegram прямо сейчас.</p>
         </div>
 
         <div class="warning">
-            <p><strong>⚠️ Внимание:</strong> Для установки widget необходимы права администратора в AmoCRM.</p>
+            <p><strong>⚠️ Важно:</strong> Встраивание виджета в карточку контакта (как у Radist/Wazzup) требует публикации в маркетплейс AmoCRM или наличия раздела "API → Виджеты" в вашем аккаунте.</p>
+        </div>
+
+        <div class="success" style="margin-top: 20px;">
+            <p><strong>✅ СПОСОБ 1: Отправка через примечания (работает СЕЙЧАС)</strong></p>
         </div>
 
         <div class="step">
-            <h3><span class="step-number">1</span>Регистрация интеграции в AmoCRM</h3>
-            <p>Перейдите в раздел <strong>Настройки → Интеграции → Создать интеграцию</strong> в вашем аккаунте AmoCRM.</p>
-            <p>Заполните основную информацию:</p>
-            <div class="config-item">
-                <span class="config-label">Название:</span>
-                <span class="config-value">Telegram CRM</span>
-            </div>
-            <div class="config-item">
-                <span class="config-label">Тип:</span>
-                <span class="config-value">Widget (виджет)</span>
-            </div>
-        </div>
-
-        <div class="step">
-            <h3><span class="step-number">2</span>Настройка OAuth</h3>
-            <p>В разделе OAuth настройте следующие параметры:</p>
+            <h3><span class="step-number">1</span>Убедитесь, что интеграция OAuth настроена</h3>
+            <p>Если вы еще не настроили OAuth интеграцию:</p>
+            <ol style="line-height: 1.8;">
+                <li>Перейдите в <strong>Настройки → Интеграции → Создать интеграцию</strong></li>
+                <li>Укажите тип: <strong>Приватная интеграция (OAuth)</strong></li>
+                <li>В разделе OAuth укажите Redirect URI:</li>
+            </ol>
             <div class="config-item">
                 <span class="config-label">Redirect URI:</span>
                 <span class="config-value" id="redirect-uri"></span>
                 <button class="copy-btn" onclick="copyToClipboard('redirect-uri')">Копировать</button>
             </div>
-            <div class="config-item">
-                <span class="config-label">Client ID:</span>
-                <span class="config-value">Скопируйте после создания</span>
-            </div>
-            <div class="config-item">
-                <span class="config-label">Client Secret:</span>
-                <span class="config-value">Скопируйте после создания</span>
-            </div>
-        </div>
-
-        <div class="success">
-            <p><strong>✅ Способ 1: Загрузка виджета в AmoCRM (рекомендуется)</strong></p>
+            <p style="margin-top: 15px;">После создания скопируйте <strong>Client ID</strong> и <strong>Client Secret</strong> из раздела "Ключи и доступы".</p>
         </div>
 
         <div class="step">
-            <h3><span class="step-number">3</span>Скачать и установить виджет</h3>
-            <p>Виджет позволяет встроить чат Telegram прямо в карточку контакта.</p>
+            <h3><span class="step-number">2</span>Настройте Webhook для получения примечаний</h3>
+            <p>В интеграции AmoCRM в разделе "Ключи и доступы" настройте webhook:</p>
+            <div class="config-item">
+                <span class="config-label">Webhook URL:</span>
+                <span class="config-value" id="webhook-url"></span>
+                <button class="copy-btn" onclick="copyToClipboard('webhook-url')">Копировать</button>
+            </div>
+            <p>Включите события:</p>
+            <ul>
+                <li><strong>notes.add</strong> - добавление примечаний</li>
+                <li>contacts.update - обновление контактов (опционально)</li>
+            </ul>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">3</span>Создайте пользовательские поля в контактах</h3>
+            <p>Перейдите в <strong>Настройки → Настройка → Контакты</strong> и создайте поля:</p>
+            <div class="config-item">
+                <span class="config-label">telegram_username:</span>
+                <span class="config-value">Текст (для @username)</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">telegram_chat_id:</span>
+                <span class="config-value">Число (для ID чата)</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">telegram_consent:</span>
+                <span class="config-value">Переключатель (согласие на рассылку)</span>
+            </div>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">4</span>Начните использовать!</h3>
+            <p><strong>Как отправить сообщение клиенту:</strong></p>
+            <ol style="line-height: 1.8;">
+                <li>Откройте карточку контакта в AmoCRM</li>
+                <li>Убедитесь, что заполнены поля <code>telegram_username</code> или <code>telegram_chat_id</code></li>
+                <li>Добавьте примечание с тегом <code>#telegram</code>:</li>
+            </ol>
+            <div class="code-block">Привет! Как дела? #telegram</div>
+            <p style="margin-top: 15px;"><strong>Входящие сообщения:</strong> Когда клиент ответит в Telegram, его сообщение автоматически появится в примечаниях контакта.</p>
+        </div>
+
+        <div class="success" style="margin-top: 40px;">
+            <p><strong>✅ Готово!</strong> Теперь вы можете общаться с клиентами через Telegram прямо из AmoCRM.</p>
+        </div>
+
+        <div class="warning" style="margin-top: 40px;">
+            <p><strong>⚠️ СПОСОБ 2: Встраивание виджета в карточку (требует дополнительной настройки)</strong></p>
+        </div>
+
+        <div class="step">
+            <h3>Встраивание виджета как у Radist/Wazzup/i2crm</h3>
+            <p>Чтобы получить полноценный чат прямо в карточке контакта (как у популярных интеграций), есть три варианта:</p>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">A</span>Вариант 1: Раздел "API → Виджеты"</h3>
+            <p><strong>Если в вашем AmoCRM есть раздел "API → Виджеты":</strong></p>
 
             <div class="config-item" style="margin: 20px 0;">
                 <a href="/api/amocrm/widget/download"
@@ -189,84 +234,92 @@
                 </a>
             </div>
 
-            <p><strong>Установка:</strong></p>
             <ol style="line-height: 1.8;">
+                <li>Скачайте виджет по кнопке выше</li>
                 <li>Перейдите в AmoCRM: <strong>Настройки → API → Виджеты</strong></li>
                 <li>Нажмите кнопку <strong>"Добавить виджет"</strong> (внизу страницы)</li>
-                <li>Загрузите скачанный файл <code>telegram_crm_widget.zip</code></li>
+                <li>Загрузите файл <code>telegram_crm_widget.zip</code></li>
                 <li>Нажмите <strong>"Установить"</strong></li>
-                <li>Виджет появится в карточках контактов автоматически</li>
             </ol>
 
             <div class="warning">
-                <p><strong>💡 Примечание:</strong> После установки виджет будет автоматически отображаться в правой панели карточек контактов, сделок и компаний.</p>
+                <p><strong>⚠️ Важно:</strong> Раздел "API → Виджеты" доступен не во всех типах интеграций. Если вы не видите этот раздел, используйте Вариант 2.</p>
             </div>
-        </div>
-
-        <div class="success" style="margin-top: 40px;">
-            <p><strong>✅ Способ 2: Прямой iframe (альтернатива)</strong></p>
         </div>
 
         <div class="step">
-            <h3><span class="step-number">4</span>Альтернатива: Прямой iframe</h3>
-            <p>Если не хотите загружать виджет, можете использовать прямой iframe:</p>
-            <div class="config-item">
-                <span class="config-label">Размещение:</span>
-                <span class="config-value">Карточка контакта (отдельная вкладка)</span>
+            <h3><span class="step-number">B</span>Вариант 2: Публикация в маркетплейс AmoCRM</h3>
+            <p><strong>Для полноценного встраивания как у Radist/Wazzup:</strong></p>
+            <ol style="line-height: 1.8;">
+                <li>Подать интеграцию на публикацию в маркетплейс AmoCRM</li>
+                <li>Пройти модерацию кода и функционала (2-4 недели)</li>
+                <li>После публикации виджет будет доступен для установки всем пользователям</li>
+            </ol>
+            <p>Документация: <a href="https://www.amocrm.ru/developers/content/integrations/marketplace" target="_blank">https://www.amocrm.ru/developers/content/integrations/marketplace</a></p>
+
+            <div class="warning">
+                <p><strong>💡 Примечание:</strong> Это единственный способ получить точно такую же интеграцию, как у Radist, Wazzup, i2crm. Все эти сервисы прошли публикацию в маркетплейс.</p>
             </div>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">C</span>Вариант 3: Прямой URL виджета</h3>
+            <p><strong>Временное решение:</strong> открывать чат в отдельной вкладке браузера</p>
             <div class="config-item">
-                <span class="config-label">URL iframe:</span>
+                <span class="config-label">URL для открытия:</span>
                 <span class="config-value" id="widget-url"></span>
                 <button class="copy-btn" onclick="copyToClipboard('widget-url')">Копировать</button>
             </div>
-            <div class="config-item">
-                <span class="config-label">Название вкладки:</span>
-                <span class="config-value">Telegram</span>
+            <p style="margin-top: 15px;">Замените <code>{{contact.id}}</code> на реальный ID контакта и откройте URL в браузере.</p>
+
+            <div class="warning">
+                <p><strong>⚠️ Ограничение:</strong> Виджет не будет встроен в карточку контакта, только как отдельная страница.</p>
             </div>
         </div>
 
-        <div class="step">
-            <h3><span class="step-number">5</span>Настройка Webhook</h3>
-            <p>Для получения событий от AmoCRM настройте webhook:</p>
-            <div class="config-item">
-                <span class="config-label">Webhook URL:</span>
-                <span class="config-value" id="webhook-url"></span>
-                <button class="copy-btn" onclick="copyToClipboard('webhook-url')">Копировать</button>
-            </div>
-            <p>Включите события:</p>
-            <ul>
-                <li>notes.add (примечания)</li>
-                <li>contacts.update (обновление контактов)</li>
+        <div class="step" style="margin-top: 40px;">
+            <h3>Что выбрать?</h3>
+            <ul style="line-height: 1.8;">
+                <li><strong>Для немедленного использования:</strong> Способ 1 (примечания с #telegram) - работает прямо сейчас</li>
+                <li><strong>Если есть раздел "API → Виджеты":</strong> Вариант A - установка zip-файла</li>
+                <li><strong>Для полноценной интеграции как у Radist:</strong> Вариант B - публикация в маркетплейс</li>
+                <li><strong>Для тестирования:</strong> Вариант C - прямой URL</li>
             </ul>
         </div>
 
-        <div class="step">
-            <h3><span class="step-number">6</span>Настройка пользовательских полей</h3>
-            <p>Создайте следующие поля в контактах AmoCRM:</p>
-            <div class="config-item">
-                <span class="config-label">telegram_username:</span>
-                <span class="config-value">Текстовое поле для @username</span>
-            </div>
-            <div class="config-item">
-                <span class="config-label">telegram_chat_id:</span>
-                <span class="config-value">Числовое поле для ID чата</span>
-            </div>
-            <div class="config-item">
-                <span class="config-label">telegram_consent:</span>
-                <span class="config-value">Переключатель (согласие на рассылку)</span>
-            </div>
+        <div class="success" style="margin-top: 40px;">
+            <p><strong>✅ Рекомендация:</strong> Начните с примечаний (#telegram) прямо сейчас, а параллельно подайте заявку на публикацию в маркетплейс для получения полноценного виджета.</p>
         </div>
 
-        <div class="success">
-            <p><strong>✅ Готово!</strong> После завершения настройки widget появится в карточках контактов на отдельной вкладке "Telegram".</p>
-        </div>
+        <div class="step" style="margin-top: 40px; background: #f0f9ff; border-left: 4px solid #0077ff;">
+            <h3>🔧 Для разработчиков: API endpoints</h3>
+            <p>Вся инфраструктура уже реализована и работает:</p>
 
-        <div class="step">
-            <h3>Как использовать</h3>
-            <p>1. Откройте карточку контакта в AmoCRM</p>
-            <p>2. Перейдите на вкладку "Telegram"</p>
-            <p>3. Отправляйте сообщения клиентам прямо из карточки</p>
-            <p>4. Входящие сообщения будут автоматически отображаться в истории</p>
+            <div class="code-block" style="margin: 10px 0;">
+POST /api/amocrm/widget/send
+Отправка сообщения из виджета
+
+GET /api/amocrm/widget/history?contact_id=123
+Получить историю сообщений
+
+GET /api/amocrm/widget/chat?contact_id=123
+HTML-интерфейс чата (работает прямо сейчас!)
+
+POST /api/webhook/amocrm
+Webhook для получения событий от AmoCRM
+            </div>
+
+            <p style="margin-top: 15px;"><strong>Технически всё готово:</strong></p>
+            <ul style="line-height: 1.8;">
+                <li>✅ Backend API для отправки/получения сообщений</li>
+                <li>✅ Frontend виджет с интерфейсом чата</li>
+                <li>✅ Обработка webhook от AmoCRM (примечания, контакты)</li>
+                <li>✅ Статусы доставки (queued, sent, delivered, read, failed)</li>
+                <li>✅ История переписки в базе данных</li>
+                <li>✅ Пакет виджета (telegram_crm_widget.zip)</li>
+            </ul>
+
+            <p style="margin-top: 15px;"><strong>Ограничение:</strong> Для встраивания в карточку контакта требуется публикация в маркетплейс или наличие раздела "API → Виджеты".</p>
         </div>
     </div>
 

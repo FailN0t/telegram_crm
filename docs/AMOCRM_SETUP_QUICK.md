@@ -1,26 +1,26 @@
-# 🚀 Быстрая настройка AmoCRM для yourdomain
+# Быстрая настройка AmoCRM
 
 ## Данные интеграции
 
 **Домен AmoCRM:** `yourdomain.amocrm.ru`
 
-**Integration ID:** `your-integration-id`
+**Integration ID:** получите при создании интеграции в AmoCRM
 
-**Secret Key:** (хранится в безопасном месте)
-
-**Долгосрочный токен:** (действителен до 2031 года)
+**Secret Key:** хранится в безопасном месте (файл `.env`)
 
 ---
 
 ## Кастомные поля контактов
 
-В AmoCRM уже созданы 3 кастомных поля:
+В AmoCRM нужно создать 3 кастомных поля:
 
-| Поле | Тип | Field ID | Назначение |
-|------|-----|----------|------------|
-| **Telegram Username** | Текст | `<field_id>` | Хранит @username клиента |
-| **Telegram Chat ID** | Число | `<field_id>` | ID чата в Telegram |
-| **Telegram Consent** | Переключатель | `<field_id>` | Согласие на контакт |
+| Поле | Тип | Назначение |
+|------|-----|------------|
+| **Telegram Username** | Текст | Хранит @username клиента |
+| **Telegram Chat ID** | Число | ID чата в Telegram |
+| **Telegram Consent** | Переключатель | Согласие на контакт |
+
+После создания полей запишите их Field ID из URL AmoCRM и укажите в `.env`.
 
 ---
 
@@ -40,18 +40,18 @@ cp .env.production.example .env
 ```bash
 # AmoCRM
 AMOCRM_DOMAIN=yourdomain.amocrm.ru
-AMOCRM_CLIENT_ID=your-integration-id
+AMOCRM_CLIENT_ID=<ваш_integration_id>
 AMOCRM_CLIENT_SECRET=<ваш_секретный_ключ>
 AMOCRM_REDIRECT_URI=https://your-server.example.com/api/admin/amocrm/oauth/callback
 
-# Долгосрочный токен (уже есть!)
-AMOCRM_ACCESS_TOKEN=<ваш_долгосрочный_токен>
-AMOCRM_TOKEN_EXPIRES_AT=2031-03-20T00:00:00Z
+# Долгосрочный токен или OAuth
+AMOCRM_ACCESS_TOKEN=<ваш_токен>
+AMOCRM_TOKEN_EXPIRES_AT=<дата_истечения>
 
-# Field IDs (уже настроены!)
-AMOCRM_FIELD_TELEGRAM_USERNAME=0
-AMOCRM_FIELD_TELEGRAM_CHAT_ID=0
-AMOCRM_FIELD_TELEGRAM_CONSENT=0
+# Field IDs (узнайте в AmoCRM → Настройки → Контакты → Дополнительные поля)
+AMOCRM_FIELD_TELEGRAM_USERNAME=<field_id>
+AMOCRM_FIELD_TELEGRAM_CHAT_ID=<field_id>
+AMOCRM_FIELD_TELEGRAM_CONSENT=<field_id>
 
 # Telegram
 TELEGRAM_API_ID=<из my.telegram.org>
@@ -98,7 +98,7 @@ curl http://localhost:8000/api/admin/amocrm/status | jq
   "configured": true,
   "domain": "yourdomain.amocrm.ru",
   "has_tokens": true,
-  "token_expires_at": "2031-03-20T00:00:00Z"
+  "token_expires_at": "..."
 }
 ```
 
@@ -106,7 +106,7 @@ curl http://localhost:8000/api/admin/amocrm/status | jq
 
 ## Получение Refresh Token (опционально)
 
-Долгосрочный токен действителен до 2031 года, но для автообновления рекомендуется получить refresh_token:
+Для автообновления токена рекомендуется получить refresh_token:
 
 1. Откройте: `https://your-server.example.com/admin/settings`
 2. Войдите с Basic Auth credentials
@@ -144,7 +144,7 @@ curl -X POST http://localhost:8000/api/send-message \
 
 ### Проблема: "Token expired"
 
-**Решение:** Токен действителен до 2031 года. Если видите эту ошибку:
+**Решение:**
 1. Проверьте что `AMOCRM_ACCESS_TOKEN` правильно скопирован в `.env`
 2. Повторите OAuth flow для получения нового refresh_token
 
@@ -169,7 +169,7 @@ curl -H "Authorization: Bearer $AMOCRM_ACCESS_TOKEN" \
 
 ## Безопасность
 
-⚠️ **ВАЖНО:**
+**ВАЖНО:**
 
 - `.env` файл НИКОГДА не коммитится в git (уже в .gitignore)
 - Токены и ключи хранятся ТОЛЬКО на сервере
@@ -183,13 +183,13 @@ openssl rand -hex 32
 
 ---
 
-## Готово! ✅
+## Готово!
 
 AmoCRM интеграция настроена и готова к работе.
 
 **Проверьте чеклист:**
 - [ ] `.env` файл заполнен на сервере
-- [ ] Field IDs корректные (000001, 000002, 000003)
+- [ ] Field IDs корректные
 - [ ] Миграции применены
 - [ ] Приложение запущено
 - [ ] Статус показывает `has_tokens: true`

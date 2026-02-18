@@ -1,7 +1,11 @@
 /**
  * Telegram CRM Widget для AmoCRM
  * Встраивает iframe с чатом Telegram в карточку контакта
+ *
+ * ВАЖНО: Замените WIDGET_BASE_URL на URL вашего сервера Telegram CRM
  */
+
+var WIDGET_BASE_URL = 'https://your-server.example.com';
 
 define(['jquery'], function($) {
     var CustomWidget = function() {
@@ -64,7 +68,7 @@ define(['jquery'], function($) {
                     }
 
                     // URL iframe
-                    var iframe_url = 'https://your-server.example.com/api/amocrm/widget/chat?contact_id=' + contact_id;
+                    var iframe_url = WIDGET_BASE_URL + '/api/amocrm/widget/chat?contact_id=' + contact_id;
 
                     // Создать iframe
                     var $iframe = $('<iframe>', {
@@ -122,7 +126,7 @@ define(['jquery'], function($) {
                         function(response) {
                             if (response && response._embedded && response._embedded.contacts && response._embedded.contacts.length > 0) {
                                 var contact_id = response._embedded.contacts[0].id;
-                                var iframe_url = 'https://your-server.example.com/api/amocrm/widget/chat?contact_id=' + contact_id;
+                                var iframe_url = WIDGET_BASE_URL + '/api/amocrm/widget/chat?contact_id=' + contact_id;
 
                                 var $iframe = $('<iframe>', {
                                     src: iframe_url,

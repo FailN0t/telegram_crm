@@ -74,3 +74,7 @@ logs/
 *.bak
 *.backup
 
+# Widget archives (distribute via GitHub Releases)
+telegram_crm_widget.zip
+static/telegram_crm_widget.zip
+

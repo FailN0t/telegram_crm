@@ -14,7 +14,7 @@ from src.logger import logger
 async def fix_events():
     """Удаление старых и регистрация новых событий"""
 
-    webhook_url = "https://your-server.example.com/api/webhook/bitrix24/openlines"
+    webhook_url = f"https://{settings.BITRIX24_DOMAIN or 'your-server.example.com'}/api/webhook/bitrix24/openlines"
 
     logger.info("🔧 Инициализация Bitrix24 клиента...")
     from src.database import init_db

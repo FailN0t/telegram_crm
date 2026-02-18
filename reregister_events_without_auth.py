@@ -12,7 +12,7 @@ from src.logger import logger
 async def reregister_events():
     """Переустановка событий без auth_type параметра"""
 
-    webhook_url = "https://your-server.example.com/api/webhook/bitrix24/openlines"
+    webhook_url = f"https://{settings.BITRIX24_DOMAIN or 'your-server.example.com'}/api/webhook/bitrix24/openlines"
 
     logger.info("🔧 Инициализация...")
     await init_db()
