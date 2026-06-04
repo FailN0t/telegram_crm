@@ -724,7 +724,7 @@ class UiAuthAttempt(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Magic link token (UUID)
-    token = Column(String(64), nullable=False, index=True, comment="Magic link UUID token")
+    token = Column(String(64), nullable=False, comment="Magic link UUID token")
 
     # Telegram user ID if known
     telegram_user_id = Column(BigInteger, nullable=True, comment="Telegram user ID if known")
@@ -737,13 +737,12 @@ class UiAuthAttempt(Base):
     success = Column(Boolean, nullable=False, comment="Whether auth attempt was successful")
 
     # Timestamp
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
         Index('ix_ui_auth_attempts_token', 'token'),
         Index('ix_ui_auth_attempts_created_at', 'created_at'),
     )
-
 
 async def init_db():
     """Инициализация базы данных"""

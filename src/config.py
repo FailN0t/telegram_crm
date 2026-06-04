@@ -17,6 +17,8 @@ def _apply_file_secrets() -> None:
     for key, path in list(os.environ.items()):
         if not key.endswith("_FILE"):
             continue
+        if key == "LOG_FILE":
+            continue
         if not path:
             continue
         target_key = key[:-5]
