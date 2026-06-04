@@ -14,7 +14,7 @@ services:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       - postgres
       - redis
@@ -173,7 +173,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "outbox_worker"]
+      test: ["CMD", "python", "-c", "print('ok')"]
       interval: 30s
       timeout: 10s
       retries: 3

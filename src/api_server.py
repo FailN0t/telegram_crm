@@ -1182,7 +1182,7 @@ def create_app() -> FastAPI:
             logger.error(f"❌ Ошибка обработки Bitrix24 webhook: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")  # Fixed #25
 
-    @app.get("/api/bitrix24/openlines/placement", tags=["Bitrix24"])
+    @app.api_route("/api/bitrix24/openlines/placement", methods=["GET", "POST"], tags=["Bitrix24"])
     async def bitrix24_openlines_placement(request: Request):
         """
         Placement handler для Open Channels коннектора
@@ -1778,21 +1778,30 @@ def create_app() -> FastAPI:
             actual_domain = result.get("domain", target_domain)
             logger.info(f"✅ Bitrix24 приложение установлено для {actual_domain}")
 
-            # Настраиваем Open Channels если включено
+            # Настраиваем Open Channels если включено. Bitrix24 ждет быстрый ответ на install callback,
+            # поэтому не блокируем установку внешними вызовами Open Channels API.
             if settings.BITRIX24_OPEN_CHANNELS_ENABLED:
+                host = request.headers.get('host', 'localhost')
+
+                async def setup_open_channels_after_install() -> None:
+                    try:
+                        logger.info("🔧 Настройка Open Channels...")
+                        setup_result = await crm_client.setup_open_channels(
+                            connector_id=settings.BITRIX24_CONNECTOR_ID,
+                            connector_name=settings.BITRIX24_CONNECTOR_NAME,
+                            webhook_url=f"https://{host}/api/webhook/bitrix24/openlines",
+                            line_id=settings.BITRIX24_LINE_ID,
+                            placement_handler_url=f"https://{host}/api/bitrix24/openlines/placement"
+                        )
+                        logger.info(f"✅ Open Channels настроены: {setup_result}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось настроить Open Channels: {e}")
+
                 try:
                     logger.info("🔧 Настройка Open Channels...")
-                    host = request.headers.get('host', 'localhost')
-                    setup_result = await crm_client.setup_open_channels(
-                        connector_id=settings.BITRIX24_CONNECTOR_ID,
-                        connector_name=settings.BITRIX24_CONNECTOR_NAME,
-                        webhook_url=f"https://{host}/api/webhook/bitrix24/openlines",
-                        line_id=settings.BITRIX24_LINE_ID,
-                        placement_handler_url=f"https://{host}/api/bitrix24/openlines/placement"
-                    )
-                    logger.info(f"✅ Open Channels настроены: {setup_result}")
+                    asyncio.create_task(setup_open_channels_after_install())
                 except Exception as e:
-                    logger.warning(f"⚠️ Не удалось настроить Open Channels: {e}")
+                    logger.warning(f"⚠️ Не удалось запустить настройку Open Channels: {e}")
 
             # Возвращаем HTML страницу с подтверждением (отображается в iframe)
             # ВАЖНО: вызываем BX24.installFinish() чтобы завершить установку
